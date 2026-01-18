@@ -73,12 +73,12 @@ float BenchmarkMatMul(int m, int n, int k,
                      bool use_tensor_cores,
                      int num_iterations = 100);
 
-/// Get FLOPS for matrix multiplication
+/// Calculate TFLOPS from matrix multiplication parameters
 /// @param m Matrix dimension M
 /// @param n Matrix dimension N
 /// @param k Matrix dimension K
 /// @param time_ms Time in milliseconds
-/// @return TFLOPS (trillion floating-point operations per second)
+/// @return Performance in TFLOPS (trillion floating-point operations per second) as a float
 float GetTFLOPS(int m, int n, int k, float time_ms);
 
 }  // namespace fp16

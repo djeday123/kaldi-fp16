@@ -145,7 +145,7 @@ void MatrixFP16::Allocate() {
 
 void MatrixFP16::Deallocate() {
   if (data_ != nullptr) {
-    cudaFree(data_);
+    CUDA_CHECK(cudaFree(data_));
     data_ = nullptr;
   }
 }
@@ -290,10 +290,7 @@ void MatrixFP16::AddMatMat(float alpha,
   cublasOperation_t opA = transA == kNoTrans ? CUBLAS_OP_N : CUBLAS_OP_T;
   cublasOperation_t opB = transB == kNoTrans ? CUBLAS_OP_N : CUBLAS_OP_T;
   
-  // Use Tensor Core accelerated GEMM with FP16 compute and FP32 accumulation
-  const half h_alpha = __float2half(alpha);
-  const half h_beta = __float2half(beta);
-  
+  // Use Tensor Core accelerated GEMM with FP16 input/output and FP32 accumulation
   // cuBLAS uses column-major, so we swap A and B and transpose operations
   CUBLAS_CHECK(cublasGemmEx(
       handle,

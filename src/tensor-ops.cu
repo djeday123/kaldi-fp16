@@ -101,10 +101,16 @@ void TensorCoreGemm(cublasHandle_t handle,
   
   // Copy result to D if different from C
   if (D != C) {
-    CUDA_CHECK(cudaMemcpy2D(D, ldd * sizeof(half),
-                            C, ldc * sizeof(half),
-                            m * sizeof(half), n,
-                            cudaMemcpyDeviceToDevice));
+    // If strides match, do a simple copy
+    if (ldc == ldd) {
+      CUDA_CHECK(cudaMemcpy(D, C, m * n * sizeof(half), cudaMemcpyDeviceToDevice));
+    } else {
+      // Copy row by row if strides differ
+      for (int i = 0; i < n; ++i) {
+        CUDA_CHECK(cudaMemcpy(D + i * ldd, C + i * ldc, m * sizeof(half),
+                              cudaMemcpyDeviceToDevice));
+      }
+    }
   }
 }
 
