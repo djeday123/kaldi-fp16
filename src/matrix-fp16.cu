@@ -54,6 +54,32 @@ __global__ void ConvertFP16ToFP32Kernel(float* dst, const half* src, size_t size
   }
 }
 
+// CUDA kernel for strided FP32 to FP16 conversion (handles matrix stride)
+__global__ void ConvertFP32ToFP16StridedKernel(
+    half* dst, size_t dst_stride,
+    const float* src, size_t src_stride,
+    size_t rows, size_t cols) {
+  size_t row = blockIdx.y * blockDim.y + threadIdx.y;
+  size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+  
+  if (row < rows && col < cols) {
+    dst[row * dst_stride + col] = __float2half(src[row * src_stride + col]);
+  }
+}
+
+// CUDA kernel for strided FP16 to FP32 conversion (handles matrix stride)
+__global__ void ConvertFP16ToFP32StridedKernel(
+    float* dst, size_t dst_stride,
+    const half* src, size_t src_stride,
+    size_t rows, size_t cols) {
+  size_t row = blockIdx.y * blockDim.y + threadIdx.y;
+  size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+  
+  if (row < rows && col < cols) {
+    dst[row * dst_stride + col] = __half2float(src[row * src_stride + col]);
+  }
+}
+
 void ConvertFP32ToFP16(half* dst, const float* src, size_t size) {
   int blockSize = 256;
   int numBlocks = (size + blockSize - 1) / blockSize;
@@ -195,13 +221,17 @@ void MatrixFP16::CopyFromHost(const float* data) {
                         num_rows_ * num_cols_ * sizeof(float),
                         cudaMemcpyHostToDevice));
   
-  // Convert to FP16 with proper stride handling
-  for (size_t row = 0; row < num_rows_; ++row) {
-    ConvertFP32ToFP16(data_ + row * stride_,
-                     d_fp32 + row * num_cols_,
-                     num_cols_);
-  }
+  // Convert to FP16 with proper stride handling using a single kernel
+  dim3 blockSize(16, 16);
+  dim3 gridSize((num_cols_ + blockSize.x - 1) / blockSize.x,
+                (num_rows_ + blockSize.y - 1) / blockSize.y);
   
+  ConvertFP32ToFP16StridedKernel<<<gridSize, blockSize>>>(
+      data_, stride_,
+      d_fp32, num_cols_,
+      num_rows_, num_cols_);
+  
+  CUDA_CHECK(cudaGetLastError());
   CUDA_CHECK(cudaFree(d_fp32));
   CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -213,12 +243,17 @@ void MatrixFP16::CopyToHost(float* data) const {
   float* d_fp32;
   CUDA_CHECK(cudaMalloc(&d_fp32, num_rows_ * num_cols_ * sizeof(float)));
   
-  // Convert from FP16 to FP32 with proper stride handling
-  for (size_t row = 0; row < num_rows_; ++row) {
-    ConvertFP16ToFP32(d_fp32 + row * num_cols_,
-                     data_ + row * stride_,
-                     num_cols_);
-  }
+  // Convert from FP16 to FP32 with proper stride handling using a single kernel
+  dim3 blockSize(16, 16);
+  dim3 gridSize((num_cols_ + blockSize.x - 1) / blockSize.x,
+                (num_rows_ + blockSize.y - 1) / blockSize.y);
+  
+  ConvertFP16ToFP32StridedKernel<<<gridSize, blockSize>>>(
+      d_fp32, num_cols_,
+      data_, stride_,
+      num_rows_, num_cols_);
+  
+  CUDA_CHECK(cudaGetLastError());
   
   // Copy FP32 data to host
   CUDA_CHECK(cudaMemcpy(data, d_fp32,

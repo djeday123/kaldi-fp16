@@ -24,7 +24,9 @@ namespace fp16 {
   } while(0)
 
 void InitTensorCoreOps() {
-  // Initialize CUDA runtime
+  // Initialize CUDA runtime by calling a lightweight CUDA API
+  // cudaFree(0) is a common idiom to trigger runtime initialization
+  // without actually freeing any memory (null pointer is safe)
   cudaFree(0);
   
   // Query device properties
@@ -101,16 +103,13 @@ void TensorCoreGemm(cublasHandle_t handle,
   
   // Copy result to D if different from C
   if (D != C) {
-    // If strides match, do a simple copy
-    if (ldc == ldd) {
-      CUDA_CHECK(cudaMemcpy(D, C, m * n * sizeof(half), cudaMemcpyDeviceToDevice));
-    } else {
-      // Copy row by row if strides differ
-      for (int i = 0; i < n; ++i) {
-        CUDA_CHECK(cudaMemcpy(D + i * ldd, C + i * ldc, m * sizeof(half),
-                              cudaMemcpyDeviceToDevice));
-      }
-    }
+    // Use cudaMemcpy2D for efficient strided copy
+    CUDA_CHECK(cudaMemcpy2D(
+        D, ldd * sizeof(half),  // destination and pitch
+        C, ldc * sizeof(half),  // source and pitch
+        m * sizeof(half),       // width in bytes (number of elements in a row)
+        n,                      // height (number of rows)
+        cudaMemcpyDeviceToDevice));
   }
 }
 
