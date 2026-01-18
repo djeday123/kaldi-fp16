@@ -1,0 +1,72 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+
+# Build artifacts
+*.o
+*.so
+*.a
+*.lib
+*.dll
+*.dylib
+*.exe
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled binaries
+examples/basic_matmul
+examples/benchmark_fp16
+examples/compare_precision
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Testing
+Testing/
+CTestTestfile.cmake
+
+# Documentation build
+docs/_build/
+docs/html/
+docs/latex/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Dependencies
+third_party/*/
+
+# Installation
+install/
+dist/
+
+# Profiling
+*.nvprof
+*.nvvp
+*.qdrep
+
+# Core dumps
+core
+core.*
