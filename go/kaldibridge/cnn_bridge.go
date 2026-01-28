@@ -5,7 +5,7 @@ package kaldibridge
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../cpp/include
-#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lcublas -lcudart -lstdc++
+#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16_cgo -lkaldi_fp16 -lcublas -lcudart -lstdc++
 
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -70,15 +70,24 @@ void launch_pointwise_conv1d_fp16(
     void* stream
 );
 
-// CUDA memory management
-cudaError_t cudaMalloc(void** devPtr, size_t size);
-cudaError_t cudaFree(void* devPtr);
-cudaError_t cudaMemcpy(void* dst, const void* src, size_t count, int kind);
-cudaError_t cudaMemset(void* devPtr, int value, size_t count);
-cudaError_t cudaDeviceSynchronize();
+// CUDA memory wrappers for CGO
+static inline void* cgo_cuda_malloc(size_t size) {
+    void* ptr = NULL;
+    cudaMalloc(&ptr, size);
+    return ptr;
+}
 
-#define cudaMemcpyHostToDevice 1
-#define cudaMemcpyDeviceToHost 2
+static inline void cgo_cuda_free(void* ptr) {
+    cudaFree(ptr);
+}
+
+static inline void cgo_cuda_memset(void* ptr, int value, size_t count) {
+    cudaMemset(ptr, value, count);
+}
+
+static inline void cgo_cuda_sync() {
+    cudaDeviceSynchronize();
+}
 */
 import "C"
 
@@ -184,8 +193,8 @@ func (c *Conv1DGPU) Backward(input, gradOutput *TensorGPU, batch, timeIn, timeOu
 	}
 
 	// Zero gradients
-	C.cudaMemset(unsafe.Pointer(c.GradWeight.handle), 0, C.size_t(c.GradWeight.Size()*2))
-	C.cudaMemset(unsafe.Pointer(c.GradBias.handle), 0, C.size_t(c.GradBias.Size()*2))
+	C.cgo_cuda_memset(unsafe.Pointer(c.GradWeight.handle), 0, C.size_t(c.GradWeight.Size()*2))
+	C.cgo_cuda_memset(unsafe.Pointer(c.GradBias.handle), 0, C.size_t(c.GradBias.Size()*2))
 
 	C.launch_conv1d_backward_fp16(
 		unsafe.Pointer(input.handle),
@@ -232,11 +241,10 @@ type TensorGPUInt32 struct {
 
 // NewTensorGPUInt32 allocates int32 tensor on GPU
 func NewTensorGPUInt32(rows, cols int) (*TensorGPUInt32, error) {
-	var ptr unsafe.Pointer
 	size := rows * cols * 4 // int32 = 4 bytes
-	ret := C.cudaMalloc(&ptr, C.size_t(size))
-	if ret != 0 {
-		return nil, fmt.Errorf("cudaMalloc failed: %d", ret)
+	ptr := C.cgo_cuda_malloc(C.size_t(size))
+	if ptr == nil {
+		return nil, fmt.Errorf("cudaMalloc failed")
 	}
 
 	t := &TensorGPUInt32{ptr: ptr, rows: rows, cols: cols}
@@ -246,7 +254,7 @@ func NewTensorGPUInt32(rows, cols int) (*TensorGPUInt32, error) {
 
 func (t *TensorGPUInt32) Free() {
 	if t.ptr != nil {
-		C.cudaFree(t.ptr)
+		C.cgo_cuda_free(t.ptr)
 		t.ptr = nil
 	}
 }
@@ -567,5 +575,5 @@ func (dsc *DepthwiseSeparableConv1DGPU) Free() {
 
 // Synchronize waits for all GPU operations to complete
 func Synchronize() {
-	C.cudaDeviceSynchronize()
+	C.cgo_cuda_sync()
 }

@@ -6,8 +6,8 @@ project(kaldi_fp16 LANGUAGES CXX CUDA)
 # ==============================================================================
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-option(BUILD_TESTS "Build tests" ON)
-option(BUILD_EXAMPLES "Build examples" ON)
+option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_EXAMPLES "Build examples" OFF)
 
 # CUDA architecture - default to Ampere (RTX 30xx, A100)
 set(CUDA_ARCH "86" CACHE STRING "CUDA architecture (e.g., 70 for V100, 80 for A100, 86 for RTX 30xx)")
@@ -66,6 +66,7 @@ find_library(CUDNN_LIBRARY cudnn
 add_library(kaldi_fp16
     src/tensor_fp16.cpp
     cuda/kernels.cu
+    cuda/cnn_kernels.cu
 )
 
 target_include_directories(kaldi_fp16 PUBLIC
@@ -88,10 +89,10 @@ endif()
 # ==============================================================================
 
 add_library(kaldi_fp16_cgo SHARED
-    src/cgo_interface.cpp
+    src/cgo_interface.cu
 )
 
-target_link_libraries(kaldi_fp16_cgo PRIVATE kaldi_fp16)
+target_link_libraries(kaldi_fp16_cgo PRIVATE kaldi_fp16 CUDA::cublas)
 
 # ==============================================================================
 # Tests

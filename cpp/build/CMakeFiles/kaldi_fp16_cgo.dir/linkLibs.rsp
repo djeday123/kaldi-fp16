@@ -1,0 +1,1 @@
+ -Wl,-rpath,/projects/pr2/kaldi-fp16/cpp/build: libkaldi_fp16.so "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libcublas.so" "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libcublasLt.so" "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libculibos.a" "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libcudart.so" -lcudadevrt -lcudart_static -lrt -lpthread -ldl 

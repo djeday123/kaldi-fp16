@@ -1,0 +1,1 @@
+-I"/projects/pr2/kaldi-fp16/cpp/include" -isystem "/usr/local/cuda-12.8/targets/x86_64-linux/include"

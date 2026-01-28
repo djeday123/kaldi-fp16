@@ -1,0 +1,1 @@
+/usr/local/cuda-12.8/bin/nvcc -forward-unknown-to-host-compiler  --use_fast_math "--generate-code=arch=compute_89,code=[compute_89,sm_89]" -Xcompiler=-fPIC -Wno-deprecated-gpu-targets -shared -dlink --options-file CMakeFiles/kaldi_fp16.dir/deviceObjects1.rsp -o CMakeFiles/kaldi_fp16.dir/cmake_device_link.o --options-file CMakeFiles/kaldi_fp16.dir/deviceLinkLibs.rsp

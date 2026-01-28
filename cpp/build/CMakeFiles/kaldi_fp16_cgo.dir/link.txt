@@ -1,0 +1,1 @@
+/usr/bin/g++ -fPIC -shared -Wl,-soname,libkaldi_fp16_cgo.so -o libkaldi_fp16_cgo.so @CMakeFiles/kaldi_fp16_cgo.dir/objects1.rsp CMakeFiles/kaldi_fp16_cgo.dir/cmake_device_link.o @CMakeFiles/kaldi_fp16_cgo.dir/linkLibs.rsp -L"/usr/local/cuda-12.8/targets/x86_64-linux/lib/stubs" -L"/usr/local/cuda-12.8/targets/x86_64-linux/lib"

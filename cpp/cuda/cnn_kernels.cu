@@ -807,4 +807,24 @@ void launch_depthwise_conv1d_fp16(
     );
 }
 
+void launch_pointwise_conv1d_fp16(
+    const void* input, const void* weight, const void* bias,
+    void* output,
+    int batch_size, int time_steps, int in_channels, int out_channels,
+    cudaStream_t stream
+) {
+    dim3 block(16, 16);
+    dim3 grid(
+        (time_steps + block.x - 1) / block.x,
+        (out_channels + block.y - 1) / block.y,
+        batch_size
+    );
+    
+    pointwise_conv1d_fp16<<<grid, block, 0, stream>>>(
+        (const __half*)input, (const __half*)weight, (const __half*)bias,
+        (__half*)output,
+        batch_size, time_steps, in_channels, out_channels
+    );
+}
+
 }  // extern "C"

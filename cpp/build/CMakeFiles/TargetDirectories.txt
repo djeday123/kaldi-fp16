@@ -1,0 +1,8 @@
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/kaldi_fp16.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/kaldi_fp16_cgo.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/edit_cache.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/rebuild_cache.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/list_install_components.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/install.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/install/local.dir
+/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles/install/strip.dir

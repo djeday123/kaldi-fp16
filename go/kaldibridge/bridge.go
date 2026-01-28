@@ -2,7 +2,7 @@ package kaldibridge
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../cpp/include
-#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lcublas -lcudart -lstdc++
+#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16_cgo -lkaldi_fp16 -lcublas -lcudart -lstdc++
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -247,7 +247,7 @@ func FromHostGPU(data []float32, rows, cols int) (*TensorGPU, error) {
 // ============================================================================
 
 // GEMM performs C = alpha * A @ B + beta * C using Tensor Cores
-func GEMM(handle *CuBLASHandle, A, B, C *TensorGPU, alpha, beta float32, transA, transB bool) error {
+func GEMM(handle *CuBLASHandle, A, B, Out *TensorGPU, alpha, beta float32, transA, transB bool) error {
 	handle.mu.Lock()
 	defer handle.mu.Unlock()
 
@@ -262,7 +262,7 @@ func GEMM(handle *CuBLASHandle, A, B, C *TensorGPU, alpha, beta float32, transA,
 
 	C.kaldi_gemm(
 		handle.ptr,
-		A.handle, B.handle, C.handle,
+		A.handle, B.handle, Out.handle,
 		C.float(alpha), C.float(beta),
 		C.int(tA), C.int(tB),
 	)
@@ -276,17 +276,17 @@ func MatMulGPU(handle *CuBLASHandle, A, B *TensorGPU) (*TensorGPU, error) {
 		return nil, errors.New("incompatible dimensions for matmul")
 	}
 
-	C, err := NewTensorGPU(A.Rows(), B.Cols())
+	Out, err := NewTensorGPU(A.Rows(), B.Cols())
 	if err != nil {
 		return nil, err
 	}
 
-	if err := GEMM(handle, A, B, C, 1.0, 0.0, false, false); err != nil {
-		C.Free()
+	if err := GEMM(handle, A, B, Out, 1.0, 0.0, false, false); err != nil {
+		Out.Free()
 		return nil, err
 	}
 
-	return C, nil
+	return Out, nil
 }
 
 // ReLUGPU applies ReLU activation in place
