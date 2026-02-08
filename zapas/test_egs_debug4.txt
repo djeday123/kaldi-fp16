@@ -1,0 +1,44 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"kaldi-fp16/go/egsreader"
+)
+
+func main() {
+	arkPath := os.Args[1]
+	fmt.Printf("Opening: %s\n", arkPath)
+
+	reader, err := egsreader.OpenArkDebug(arkPath)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer reader.Close()
+
+	for i := 0; i < 3; i++ {
+		eg, err := reader.NextDebug()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			break
+		}
+		if eg == nil {
+			break
+		}
+
+		fmt.Printf("\n=== Example %d ===\n", i+1)
+		fmt.Printf("Key: %s\n", eg.Key)
+		if eg.Input != nil {
+			fmt.Printf("Input: frames=%d, dim=%d\n", eg.Input.Data.Rows, eg.Input.Data.Cols)
+		} else {
+			fmt.Println("Input: MISSING")
+		}
+		if eg.Ivector != nil {
+			fmt.Printf("Ivector: dim=%d\n", eg.Ivector.Data.Cols)
+		} else {
+			fmt.Println("Ivector: MISSING")
+		}
+	}
+}

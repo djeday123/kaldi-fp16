@@ -1,0 +1,204 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"unsafe"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: test_structure <ark_path>")
+		os.Exit(1)
+	}
+
+	file, _ := os.Open(os.Args[1])
+	defer file.Close()
+	reader := bufio.NewReader(file)
+
+	indent := 0
+	bytesRead := 0
+	maxBytes := 50000 // Читаем первые 50KB
+
+	for bytesRead < maxBytes {
+		b, err := reader.ReadByte()
+		if err != nil {
+			break
+		}
+		bytesRead++
+
+		// Матрицы
+		if b == 'C' || b == 'F' {
+			b2, _ := reader.ReadByte()
+			bytesRead++
+			if b2 == 'M' {
+				b3, _ := reader.ReadByte()
+				bytesRead++
+
+				matType := string(b) + "M"
+				if b3 == '2' || b3 == '3' {
+					matType += string(b3)
+				} else {
+					reader.UnreadByte()
+					bytesRead--
+				}
+
+				// Читаем заголовок матрицы
+				reader.ReadByte() // space
+				var header [16]byte
+				reader.Read(header[:])
+				bytesRead += 17
+
+				// Parse header
+				minVal := readFloat32(header[0:4])
+				rangeVal := readFloat32(header[4:8])
+				rows := readInt32(header[8:12])
+				cols := readInt32(header[12:16])
+
+				printIndent(indent)
+				fmt.Printf("MATRIX %s: rows=%d cols=%d min=%.2f range=%.2f\n",
+					matType, rows, cols, minVal, rangeVal)
+
+				// Пропускаем данные матрицы
+				var dataSize int
+				if matType == "CM" {
+					dataSize = int(cols)*8 + int(rows)*int(cols) // headers + data
+				} else if matType == "CM2" || matType == "CM3" {
+					dataSize = int(rows) * int(cols) * 2 // uint16 data
+				} else {
+					dataSize = int(rows) * int(cols) * 4 // float32 data
+				}
+				skipBytes(reader, dataSize)
+				bytesRead += dataSize
+			} else {
+				reader.UnreadByte()
+				bytesRead--
+			}
+			continue
+		}
+
+		// Теги
+		if b == '<' {
+			tag := readTag(reader, &bytesRead)
+
+			if len(tag) > 0 && tag[0] == '/' {
+				indent--
+				if indent < 0 {
+					indent = 0
+				}
+			}
+
+			printIndent(indent)
+			fmt.Printf("<%s>\n", tag)
+
+			if len(tag) > 0 && tag[0] != '/' {
+				// Читаем значение после некоторых тегов
+				switch tag {
+				case "NumInputs", "NumOutputs":
+					reader.ReadByte() // space
+					size, _ := reader.ReadByte()
+					val := readBasicInt(reader, size)
+					bytesRead += 2
+					fmt.Printf("%s = %d\n", spaces(indent+1), val)
+				case "Weight":
+					reader.ReadByte() // space
+					reader.ReadByte() // size
+					var buf [4]byte
+					reader.Read(buf[:])
+					bytesRead += 6
+					fmt.Printf("%s = %.2f\n", spaces(indent+1), readFloat32(buf[:]))
+				case "NumSequences", "FramesPerSeq", "LabelDim":
+					reader.ReadByte() // space
+					size, _ := reader.ReadByte()
+					val := readBasicInt(reader, size)
+					bytesRead += 2
+					fmt.Printf("%s = %d\n", spaces(indent+1), val)
+				}
+
+				// Увеличиваем отступ для вложенных
+				if tag != "I1V" && !isValueTag(tag) {
+					indent++
+				}
+			}
+		}
+	}
+
+	fmt.Printf("\n--- Read %d bytes ---\n", bytesRead)
+}
+
+func readTag(reader *bufio.Reader, bytesRead *int) string {
+	var tag []byte
+	for {
+		b, err := reader.ReadByte()
+		*bytesRead++
+		if err != nil || b == '>' {
+			break
+		}
+		if b != ' ' {
+			tag = append(tag, b)
+		}
+	}
+	return string(tag)
+}
+
+func readFloat32(b []byte) float32 {
+	bits := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	return float32frombits(bits)
+}
+
+func float32frombits(b uint32) float32 {
+	return *(*float32)(unsafe.Pointer(&b))
+}
+
+func readInt32(b []byte) int32 {
+	return int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24
+}
+
+func readBasicInt(reader *bufio.Reader, size byte) int32 {
+	switch size {
+	case 1:
+		b, _ := reader.ReadByte()
+		return int32(b)
+	case 4:
+		var buf [4]byte
+		reader.Read(buf[:])
+		return readInt32(buf[:])
+	default:
+		return 0
+	}
+}
+
+func skipBytes(reader *bufio.Reader, n int) {
+	buf := make([]byte, 4096)
+	for n > 0 {
+		toRead := n
+		if toRead > 4096 {
+			toRead = 4096
+		}
+		reader.Read(buf[:toRead])
+		n -= toRead
+	}
+}
+
+func printIndent(n int) {
+	for i := 0; i < n; i++ {
+		fmt.Print("  ")
+	}
+}
+
+func spaces(n int) string {
+	s := ""
+	for i := 0; i < n; i++ {
+		s += "  "
+	}
+	return s
+}
+
+func isValueTag(tag string) bool {
+	switch tag {
+	case "NumInputs", "NumOutputs", "Weight", "NumSequences", "FramesPerSeq", "LabelDim":
+		return true
+	}
+	return false
+}

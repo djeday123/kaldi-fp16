@@ -1,0 +1,319 @@
+package main
+
+import (
+	"bufio"
+	"encoding/binary"
+	"fmt"
+	"math"
+	"os"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: debug_invalid <ark_path>")
+		os.Exit(1)
+	}
+
+	file, _ := os.Open(os.Args[1])
+	defer file.Close()
+	reader := bufio.NewReader(file)
+
+	targetExample := 199 // Первый проблемный
+	count := 0
+
+	for {
+		key, found := findExampleStart(reader)
+		if !found {
+			break
+		}
+		count++
+
+		if count == targetExample {
+			fmt.Printf("========== EXAMPLE %d ==========\n", count)
+			fmt.Printf("KEY: %s\n\n", key)
+			parseExampleDebug(reader)
+			return
+		} else {
+			skipExample(reader)
+		}
+	}
+}
+
+func findExampleStart(reader *bufio.Reader) (string, bool) {
+	var keyBuf []byte
+	inKey := false
+
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return "", false
+		}
+
+		if !inKey {
+			if isLetter(b) {
+				inKey = true
+				keyBuf = []byte{b}
+			}
+			continue
+		}
+
+		if isLetter(b) || isDigit(b) || b == '-' || b == '_' {
+			keyBuf = append(keyBuf, b)
+			continue
+		}
+
+		if b == ' ' && len(keyBuf) >= 3 {
+			b2, _ := reader.ReadByte()
+			if b2 == 0 {
+				b3, _ := reader.ReadByte()
+				if b3 == 'B' {
+					return string(keyBuf), true
+				}
+			}
+		}
+
+		inKey = false
+		keyBuf = nil
+	}
+}
+
+func parseExampleDebug(reader *bufio.Reader) {
+	inputCount := 0
+	matrixCount := 0
+
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			fmt.Println("EOF")
+			return
+		}
+
+		// Матрица
+		if b == 'C' || b == 'F' {
+			b2, _ := reader.ReadByte()
+			if b2 == 'M' {
+				b3, _ := reader.ReadByte()
+
+				matType := "CM"
+				if b == 'F' {
+					matType = "FM"
+				}
+
+				switch b3 {
+				case '2':
+					matType = "CM2"
+					reader.ReadByte() // space
+				case '3':
+					matType = "CM3"
+					reader.ReadByte() // space
+				}
+
+				globalMin := readFloat32(reader)
+				globalRange := readFloat32(reader)
+				rows := readInt32(reader)
+				cols := readInt32(reader)
+
+				fmt.Printf("MATRIX %s: rows=%d cols=%d min=%.2f range=%.2f",
+					matType, rows, cols, globalMin, globalRange)
+
+				// Валидация
+				if rows <= 0 || cols <= 0 || rows > 100000 || cols > 10000 {
+					fmt.Printf(" -> INVALID DIMS, SKIPPING\n")
+					continue
+				}
+
+				fmt.Printf(" -> VALID\n")
+				matrixCount++
+
+				// Пропускаем данные
+				switch matType {
+				case "CM":
+					skipBytes(reader, int(cols)*8+int(rows)*int(cols))
+				case "CM2", "CM3":
+					skipBytes(reader, int(rows)*int(cols)*2)
+				case "FM":
+					skipBytes(reader, int(rows)*int(cols)*4)
+				}
+				continue
+			}
+			reader.UnreadByte()
+		}
+
+		// Тег
+		if b == '<' {
+			tag, valid := tryReadTag(reader)
+			if !valid {
+				continue
+			}
+
+			switch tag {
+			case "NnetIo":
+				name := readName(reader)
+				inputCount++
+				fmt.Printf("<%s> name=\"%s\" (input #%d)\n", tag, name, inputCount)
+			case "I1V":
+				size := readBasicIntValue(reader)
+				fmt.Printf("  <%s> size=%d\n", tag, size)
+			case "NumInputs":
+				val := readBasicIntValue(reader)
+				fmt.Printf("<%s> %d\n", tag, val)
+			case "NumOutputs":
+				val := readBasicIntValue(reader)
+				fmt.Printf("<%s> %d\n", tag, val)
+			case "/NnetIo":
+				fmt.Printf("</%s>\n", tag[1:])
+			case "/Nnet3ChainEg":
+				fmt.Printf("</%s>\n", tag[1:])
+				fmt.Printf("\nSUMMARY: %d inputs found, %d matrices found\n", inputCount, matrixCount)
+				return
+			case "Weight":
+				reader.ReadByte() // space
+				reader.ReadByte() // size
+				val := readFloat32(reader)
+				fmt.Printf("<%s> %.4f\n", tag, val)
+			case "LabelDim":
+				val := readBasicIntValue(reader)
+				fmt.Printf("<%s> %d\n", tag, val)
+			default:
+				// Пропускаем остальные теги
+			}
+		}
+	}
+}
+
+func skipExample(reader *bufio.Reader) {
+	target := []byte("</Nnet3ChainEg>")
+	matchIdx := 0
+
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return
+		}
+
+		if b == target[matchIdx] {
+			matchIdx++
+			if matchIdx == len(target) {
+				return
+			}
+		} else {
+			matchIdx = 0
+			if b == target[0] {
+				matchIdx = 1
+			}
+		}
+	}
+}
+
+func tryReadTag(reader *bufio.Reader) (string, bool) {
+	var tagBytes []byte
+
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return "", false
+		}
+
+		if b == '>' {
+			break
+		}
+
+		if b == ' ' {
+			reader.UnreadByte()
+			break
+		}
+
+		if !isLetter(b) && !isDigit(b) && b != '/' && b != '_' {
+			return "", false
+		}
+
+		tagBytes = append(tagBytes, b)
+
+		if len(tagBytes) > 30 {
+			return "", false
+		}
+	}
+
+	if len(tagBytes) < 3 {
+		return "", false
+	}
+
+	if !isLetter(tagBytes[0]) && tagBytes[0] != '/' {
+		return "", false
+	}
+
+	if tagBytes[0] == '/' {
+		if len(tagBytes) < 4 || !isLetter(tagBytes[1]) {
+			return "", false
+		}
+	}
+
+	return string(tagBytes), true
+}
+
+func readName(reader *bufio.Reader) string {
+	b, _ := reader.ReadByte()
+	if b != ' ' {
+		reader.UnreadByte()
+	}
+
+	var name []byte
+	for {
+		b, err := reader.ReadByte()
+		if err != nil || b == ' ' || b == '<' {
+			if b == '<' {
+				reader.UnreadByte()
+			}
+			break
+		}
+		name = append(name, b)
+	}
+	return string(name)
+}
+
+func readBasicIntValue(reader *bufio.Reader) int32 {
+	reader.ReadByte() // space
+	size, _ := reader.ReadByte()
+
+	switch size {
+	case 1:
+		b, _ := reader.ReadByte()
+		return int32(b)
+	case 4:
+		return readInt32(reader)
+	}
+	return 0
+}
+
+func readFloat32(reader *bufio.Reader) float32 {
+	var buf [4]byte
+	reader.Read(buf[:])
+	bits := binary.LittleEndian.Uint32(buf[:])
+	return math.Float32frombits(bits)
+}
+
+func readInt32(reader *bufio.Reader) int32 {
+	var buf [4]byte
+	reader.Read(buf[:])
+	return int32(binary.LittleEndian.Uint32(buf[:]))
+}
+
+func skipBytes(reader *bufio.Reader, n int) {
+	buf := make([]byte, 4096)
+	for n > 0 {
+		toRead := n
+		if toRead > 4096 {
+			toRead = 4096
+		}
+		reader.Read(buf[:toRead])
+		n -= toRead
+	}
+}
+
+func isLetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func isDigit(b byte) bool {
+	return b >= '0' && b <= '9'
+}

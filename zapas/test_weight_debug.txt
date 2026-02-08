@@ -1,0 +1,30 @@
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	data, _ := os.ReadFile(os.Args[1])
+
+	// Find <Weight> tag
+	target := []byte("<Weight>")
+	for i := 0; i < len(data)-20; i++ {
+		match := true
+		for j, b := range target {
+			if data[i+j] != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			fmt.Printf("Found <Weight> at 0x%04x\n", i)
+			fmt.Printf("Next 20 bytes: % x\n", data[i+len(target):i+len(target)+20])
+			fmt.Printf("As ASCII: %q\n", data[i+len(target):i+len(target)+20])
+
+			// Only show first occurrence
+			break
+		}
+	}
+}

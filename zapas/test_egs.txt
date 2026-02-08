@@ -1,0 +1,68 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"kaldi-fp16/go/egsreader"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: test_egs <ark_path>")
+		os.Exit(1)
+	}
+
+	arkPath := os.Args[1]
+	fmt.Printf("Opening: %s\n", arkPath)
+
+	reader, err := egsreader.OpenArk(arkPath)
+	if err != nil {
+		fmt.Printf("Error opening ark: %v\n", err)
+		os.Exit(1)
+	}
+	defer reader.Close()
+
+	count := 0
+	maxExamples := 20
+
+	for count < maxExamples {
+		eg, err := reader.Next()
+		if err != nil {
+			fmt.Printf("Error reading example: %v\n", err)
+			break
+		}
+		if eg == nil {
+			fmt.Println("End of file")
+			break
+		}
+
+		count++
+		fmt.Printf("\n=== Example %d ===\n", count)
+		fmt.Printf("Key: %s\n", eg.Key)
+
+		if eg.Input != nil && eg.Input.Data != nil {
+			fmt.Printf("Input: name=%s, frames=%d, dim=%d\n",
+				eg.Input.Name, eg.Input.Data.Rows, eg.Input.Data.Cols)
+			if len(eg.Input.Data.Data) > 0 {
+				fmt.Printf("  First values: ")
+				for i := 0; i < 5 && i < len(eg.Input.Data.Data); i++ {
+					fmt.Printf("%.3f ", eg.Input.Data.Data[i])
+				}
+				fmt.Println("...")
+			}
+		}
+
+		if eg.Ivector != nil && eg.Ivector.Data != nil {
+			fmt.Printf("Ivector: name=%s, dim=%d\n", eg.Ivector.Name, eg.Ivector.Data.Cols)
+		}
+
+		if eg.Supervision != nil {
+			fmt.Printf("Supervision: name=%s, weight=%.2f, sequences=%d, frames_per_seq=%d, labels=%d\n",
+				eg.Supervision.Name, eg.Supervision.Weight, eg.Supervision.NumSequences,
+				eg.Supervision.FramesPerSeq, eg.Supervision.LabelDim)
+		}
+	}
+
+	fmt.Printf("\nRead %d examples\n", count)
+}

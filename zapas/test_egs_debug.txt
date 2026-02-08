@@ -1,0 +1,76 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: test_egs_debug <ark_path>")
+		os.Exit(1)
+	}
+
+	file, err := os.Open(os.Args[1])
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+
+	// Read first ~2000 bytes and show structure
+	data := make([]byte, 3000)
+	n, _ := reader.Read(data)
+	data = data[:n]
+
+	fmt.Printf("First %d bytes:\n\n", n)
+
+	// Find and print text markers
+	i := 0
+	for i < len(data) {
+		// Check for text tag
+		if data[i] == '<' {
+			// Read tag
+			j := i + 1
+			for j < len(data) && data[j] != '>' {
+				j++
+			}
+			if j < len(data) {
+				tag := string(data[i : j+1])
+				fmt.Printf("Offset 0x%04x: TAG %s\n", i, tag)
+
+				// Show next few bytes after tag
+				start := j + 1
+				end := start + 20
+				if end > len(data) {
+					end = len(data)
+				}
+				fmt.Printf("             : next bytes: % x\n", data[start:end])
+				i = j + 1
+				continue
+			}
+		}
+
+		// Check for CM marker
+		if i+1 < len(data) && data[i] == 'C' && data[i+1] == 'M' {
+			fmt.Printf("Offset 0x%04x: MATRIX CM\n", i)
+			// Print header
+			if i+22 < len(data) {
+				fmt.Printf("             : header: % x\n", data[i:i+22])
+			}
+		}
+
+		// Check for FM marker
+		if i+1 < len(data) && data[i] == 'F' && data[i+1] == 'M' {
+			fmt.Printf("Offset 0x%04x: MATRIX FM\n", i)
+			if i+14 < len(data) {
+				fmt.Printf("             : header: % x\n", data[i:i+14])
+			}
+		}
+
+		i++
+	}
+}

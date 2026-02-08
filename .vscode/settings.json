@@ -1,0 +1,12 @@
+{
+    "go.toolsEnvVars": {
+        "CGO_ENABLED": "1",
+        "CGO_CFLAGS": "-I/usr/local/cuda-12.8/include",
+        "CGO_LDFLAGS": "-L/projects/pr2/kaldi-fp16/cpp/build -L/usr/local/cuda-12.8/lib64"
+    },
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/cpp/include",
+        "/usr/local/cuda-12.8/include"
+    ],
+    "cmake.sourceDirectory": "/projects/pr2/kaldi-fp16/cpp"
+}

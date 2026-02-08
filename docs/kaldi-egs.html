@@ -1,0 +1,206 @@
+<h1 id="kaldi-egs-структуры-и-форматы-данных">Kaldi EGS: Структуры и
+форматы данных</h1>
+<h2 id="иерархия-структур-kaldi">1. Иерархия структур Kaldi</h2>
+<pre><code>NnetChainExample
+├── inputs: vector&lt;NnetIo&gt;          // обычно 2 элемента
+│   ├── [0] NnetIo &quot;input&quot;          // MFCC фичи [frames × 40]
+│   │   ├── name: &quot;input&quot;
+│   │   ├── indexes: vector&lt;Index&gt;  // t=-31..171 (с контекстом)
+│   │   └── features: GeneralMatrix // CM compressed [224×40]
+│   └── [1] NnetIo &quot;ivector&quot;        // i-vector [1 × 100]
+│       ├── name: &quot;ivector&quot;
+│       ├── indexes: vector&lt;Index&gt;  // t=0 (один фрейм)
+│       └── features: GeneralMatrix // CM2 compressed [1×100]
+└── outputs: vector&lt;NnetChainSupervision&gt;  // обычно 1 элемент
+    └── [0] NnetChainSupervision &quot;output&quot;
+        ├── name: &quot;output&quot;
+        ├── indexes: vector&lt;Index&gt;  // subsampled frames
+        ├── supervision: chain::Supervision (FST граф)
+        └── deriv_weights: Vector   // веса для backprop
+
+Index (информация о фрейме):
+├── n: int32  // индекс в минибатче (0 для отдельных примеров)
+├── t: int32  // временной индекс (frame number)
+└── x: int32  // дополнительный индекс (обычно 0)</code></pre>
+<h2 id="бинарный-формат-файла-.ark">2. Бинарный формат файла (.ark)</h2>
+<pre><code>[key]\x20\x00B                    // &quot;example_id&quot; + space + \x00 + &#39;B&#39; (binary)
+&lt;Nnet3ChainEg&gt;                    // пример начался
+&lt;NumInputs&gt;\x20\x04[int32]        // количество inputs (обычно 2)
+
+┌─ Input 0: MFCC features ─────────────────────────────────────────────┐
+│ &lt;NnetIo&gt;\x20&quot;input&quot;\x20         // тег + имя                         │
+│ &lt;I1V&gt;\x20\x04[int32=224]        // количество индексов               │
+│ [224 bytes delta-encoded]       // индексы (дельта-сжатие)           │
+│   • byte[0]: signed_char(t[0])  // первый t напрямую (если |t|&lt;125)  │
+│   • byte[i]: delta = t[i]-t[i-1]// последующие - дельты              │
+│   • если byte==127: читать 15 bytes (size+n, size+t, size+x)         │
+│ CM\x20[min:f32][range:f32][rows:i32][cols:i32]  // GlobalHeader      │
+│ [cols×8 bytes PerColHeaders]    // p0,p25,p75,p100 для каждой колонки│
+│ [rows×cols bytes data]          // column-major, 1 byte per value    │
+│ &lt;/NnetIo&gt;                                                            │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌─ Input 1: i-vector ──────────────────────────────────────────────────┐
+│ &lt;NnetIo&gt;\x20&quot;ivector&quot;\x20                                            │
+│ &lt;I1V&gt;\x20\x04[int32=1]          // 1 индекс                          │
+│ [1 byte: 0x00]                  // t=0                               │
+│ CM2\x20[min:f32][range:f32][rows:i32][cols:i32]  // GlobalHeader     │
+│ [rows×cols×2 bytes]             // uint16 per value, row-major       │
+│ &lt;/NnetIo&gt;                                                            │
+└──────────────────────────────────────────────────────────────────────┘
+
+&lt;NumOutputs&gt;\x20\x04[int32=1]
+&lt;NnetChainSup&gt;\x20&quot;output&quot;\x20&lt;I1V&gt;...&lt;Supervision&gt;...&lt;DW2&gt;...&lt;/NnetChainSup&gt;
+&lt;/Nnet3ChainEg&gt;</code></pre>
+<h2 id="форматы-сжатия-матриц">3. Форматы сжатия матриц</h2>
+<h3 id="cm-konebytewithcolheaders">CM (kOneByteWithColHeaders)</h3>
+<ul>
+<li><strong>Используется для</strong>: MFCC features [frames × 40]</li>
+<li><strong>Размер</strong>: 16 + cols×8 + rows×cols bytes</li>
+</ul>
+<pre><code>GlobalHeader: min(f32) + range(f32) + rows(i32) + cols(i32)
+PerColHeaders[cols]: p0(u16) + p25(u16) + p75(u16) + p100(u16)
+Data[rows×cols]: 1 byte per value, column-major order</code></pre>
+<p><strong>Декомпрессия</strong>:</p>
+<pre><code>percentile = min + range × (uint16_value / 65535)
+value = piecewise_linear(p0, p25, p75, p100, byte_value)
+  • [0-64]    → linear(p0, p25)
+  • [64-192]  → linear(p25, p75)
+  • [192-255] → linear(p75, p100)</code></pre>
+<h3 id="cm2-ktwobyte">CM2 (kTwoByte)</h3>
+<ul>
+<li><strong>Используется для</strong>: i-vectors [1 × 100]</li>
+<li><strong>Размер</strong>: 16 + rows×cols×2 bytes</li>
+</ul>
+<pre><code>GlobalHeader: min(f32) + range(f32) + rows(i32) + cols(i32)
+Data[rows×cols]: 2 bytes (uint16) per value, row-major order</code></pre>
+<p><strong>Декомпрессия</strong>:
+<code>value = min + (uint16_value / 65535) × range</code></p>
+<h3 id="cm3-konebyte">CM3 (kOneByte)</h3>
+<ul>
+<li><strong>Размер</strong>: 16 + rows×cols bytes</li>
+<li><strong>Декомпрессия</strong>:
+<code>value = min + (uint8_value / 255) × range</code></li>
+</ul>
+<h3 id="fm-full-matrix">FM (Full Matrix)</h3>
+<ul>
+<li><strong>Размер</strong>: 1 + 4 + 4 + rows×cols×4 bytes</li>
+<li><strong>Header</strong>: size_byte(1) + rows(i32) + cols(i32)</li>
+<li><strong>Data</strong>: float32 per value, row-major order</li>
+</ul>
+<h2 id="сравнение-kaldi-vs-наш-парсер">4. Сравнение: Kaldi vs Наш
+парсер</h2>
+<table>
+<colgroup>
+<col style="width: 29%" />
+<col style="width: 29%" />
+<col style="width: 40%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Компонент</th>
+<th>Kaldi C++</th>
+<th>Наш Go парсер</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Основная структура</td>
+<td><code>NnetChainExample</code></td>
+<td><code>Example</code></td>
+</tr>
+<tr class="even">
+<td>Входы</td>
+<td><code>vector&lt;NnetIo&gt; inputs</code></td>
+<td><code>[]IoBlock Inputs</code></td>
+</tr>
+<tr class="odd">
+<td>Индексы фреймов</td>
+<td><code>vector&lt;Index&gt; indexes</code></td>
+<td><code>int Size</code> (только count)</td>
+</tr>
+<tr class="even">
+<td>Матрица фич</td>
+<td><code>GeneralMatrix features</code></td>
+<td><code>MatrixInfo Matrix</code></td>
+</tr>
+<tr class="odd">
+<td>Supervision</td>
+<td><code>NnetChainSupervision</code></td>
+<td><code>SupervisionInfo Supervision</code></td>
+</tr>
+<tr class="even">
+<td>Чтение индексов</td>
+<td><code>ReadIndexVector()</code> - полное</td>
+<td><code>skipIndexVector()</code> - пропуск</td>
+</tr>
+<tr class="odd">
+<td>Чтение матрицы</td>
+<td><code>GeneralMatrix::Read()</code></td>
+<td><code>ReadCompressedMatrix/2/3/Full()</code></td>
+</tr>
+<tr class="even">
+<td>Декомпрессия</td>
+<td><code>CopyToMat()</code> - полная</td>
+<td>FirstRow только (для валидации)</td>
+</tr>
+<tr class="odd">
+<td>Использование</td>
+<td>Training loop (nnet3-train)</td>
+<td>Валидация + будет DataLoader</td>
+</tr>
+</tbody>
+</table>
+<h2 id="pipeline-создания-и-использования-egs">5. Pipeline создания и
+использования EGS</h2>
+<h3 id="создание-nnet3-chain-get-egs">Создание
+(nnet3-chain-get-egs)</h3>
+<ol type="1">
+<li>Загрузка: <code>feats.scp</code> + <code>ivectors.scp</code> +
+supervision (lattice FST)</li>
+<li>Нарезка: <code>UtteranceSplitter</code> делит utterance на
+chunks</li>
+<li>Сжатие: <code>GeneralMatrix.Compress()</code> → CM/CM2</li>
+<li>Запись: <code>NnetChainExample.Write()</code> → binary ark</li>
+</ol>
+<h3 id="merge-nnet3-chain-merge-egs">Merge (nnet3-chain-merge-egs)</h3>
+<ol type="1">
+<li>Группировка по структуре
+(<code>NnetChainExampleStructureHasher</code>)</li>
+<li><code>MergeChainExamples()</code> - объединение в минибатчи</li>
+<li>n-индексы становятся &gt; 0 (batch index)</li>
+</ol>
+<h3 id="использование-nnet3-chain-train">Использование
+(nnet3-chain-train)</h3>
+<ol type="1">
+<li><code>NnetChainExample.Read()</code> - чтение бинарного формата</li>
+<li><code>GeneralMatrix.GetMatrix()</code> - декомпрессия в
+<code>Matrix&lt;float&gt;</code></li>
+<li><code>CuMatrix.CopyFromMat()</code> - копирование на GPU</li>
+<li>Forward/Backward pass</li>
+</ol>
+<h3 id="наш-pipeline-go-cuda">Наш Pipeline (Go + CUDA)</h3>
+<ol type="1">
+<li><code>parser.ReadExample()</code> - чтение бинарного формата</li>
+<li>GPU декомпрессия CM→FP16 (Tensor Cores ready)</li>
+<li>Batching на GPU</li>
+<li>Forward/Backward с FP16 precision</li>
+</ol>
+<h2 id="статистика-датасета-2600h">6. Статистика датасета (2600h)</h2>
+<ul>
+<li><strong>Файлов</strong>: 297 (cegs.1.ark - cegs.297.ark)</li>
+<li><strong>Примеров</strong>: 6,534,076</li>
+<li><strong>Valid</strong>: 100%</li>
+<li><strong>Frame sizes</strong>: 164, 203, 224 frames</li>
+</ul>
+<h2 id="найденные-баги-при-разработке-парсера">7. Найденные баги при
+разработке парсера</h2>
+<ol type="1">
+<li><strong><code>io.ReadFull</code> vs <code>Read</code></strong>:
+<code>bufio.Reader.Read()</code> может вернуть меньше байт чем
+запрошено</li>
+<li><strong>Index delta encoding</strong>: длинный формат (byte==127)
+требует 15 байт (3×(1+4)), не 12</li>
+<li><strong>Column-major vs Row-major</strong>: CM использует
+column-major, CM2/CM3 - row-major</li>
+</ol>

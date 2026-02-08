@@ -1,0 +1,69 @@
+package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"math"
+	"os"
+)
+
+func main() {
+	data, _ := os.ReadFile(os.Args[1])
+
+	// Find all real tags by looking for pattern: <letters/> followed by space or expected data
+	i := 0
+	for i < len(data) && i < 50000 {
+		// Look for CM matrix and skip it properly
+		if i+1 < len(data) && data[i] == 'C' && data[i+1] == 'M' && (i == 0 || data[i-1] < 128) {
+			fmt.Printf("0x%04x: MATRIX CM\n", i)
+			if i+19 < len(data) {
+				// Parse header
+				globalMin := math.Float32frombits(binary.LittleEndian.Uint32(data[i+3 : i+7]))
+				globalRange := math.Float32frombits(binary.LittleEndian.Uint32(data[i+7 : i+11]))
+				numRows := binary.LittleEndian.Uint32(data[i+11 : i+15])
+				numCols := binary.LittleEndian.Uint32(data[i+15 : i+19])
+				fmt.Printf("        min=%.2f range=%.2f rows=%d cols=%d\n", globalMin, globalRange, numRows, numCols)
+
+				// Skip matrix: header(19) + colHeaders(cols*8) + data(rows*cols)
+				skip := 19 + int(numCols)*8 + int(numRows)*int(numCols)
+				fmt.Printf("        skipping %d bytes\n", skip)
+				i += skip
+				continue
+			}
+		}
+
+		// Look for real tags (ASCII printable content)
+		if data[i] == '<' {
+			j := i + 1
+			valid := true
+			for j < len(data) && j < i+50 && data[j] != '>' {
+				// Valid tag chars: letters, numbers, /
+				if !((data[j] >= 'A' && data[j] <= 'Z') ||
+					(data[j] >= 'a' && data[j] <= 'z') ||
+					(data[j] >= '0' && data[j] <= '9') ||
+					data[j] == '/' || data[j] == '_') {
+					valid = false
+					break
+				}
+				j++
+			}
+			if valid && j < len(data) && data[j] == '>' && j-i > 2 && j-i < 30 {
+				tag := string(data[i : j+1])
+				fmt.Printf("0x%04x: TAG %s\n", i, tag)
+
+				// Show next bytes for interesting tags
+				if tag == "<Weight>" || tag == "<NumSequences>" || tag == "<FramesPerSeq>" ||
+					tag == "<LabelDim>" || tag == "<NumInputs>" || tag == "<NumOutputs>" {
+					end := j + 10
+					if end > len(data) {
+						end = len(data)
+					}
+					fmt.Printf("        next: % x\n", data[j+1:end])
+				}
+				i = j + 1
+				continue
+			}
+		}
+		i++
+	}
+}

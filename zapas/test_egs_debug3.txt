@@ -1,0 +1,42 @@
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	data, _ := os.ReadFile(os.Args[1])
+
+	// Смотрим область вокруг второй матрицы (offset 0x25b4)
+	start := 0x2590
+	end := 0x2650
+	if end > len(data) {
+		end = len(data)
+	}
+
+	fmt.Printf("Bytes around second matrix (0x%04x - 0x%04x):\n\n", start, end)
+
+	for i := start; i < end; i += 16 {
+		// Hex
+		fmt.Printf("0x%04x: ", i)
+		for j := 0; j < 16 && i+j < end; j++ {
+			fmt.Printf("%02x ", data[i+j])
+		}
+		// Pad if needed
+		for j := end - i; j < 16; j++ {
+			fmt.Print("   ")
+		}
+		// ASCII
+		fmt.Print(" |")
+		for j := 0; j < 16 && i+j < end; j++ {
+			b := data[i+j]
+			if b >= 32 && b < 127 {
+				fmt.Printf("%c", b)
+			} else {
+				fmt.Print(".")
+			}
+		}
+		fmt.Println("|")
+	}
+}
