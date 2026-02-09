@@ -9,8 +9,8 @@ option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_EXAMPLES "Build examples" OFF)
 
-# CUDA architecture - default to Ampere (RTX 30xx, A100)
-set(CUDA_ARCH "86" CACHE STRING "CUDA architecture (e.g., 70 for V100, 80 for A100, 86 for RTX 30xx)")
+# CUDA architecture - RTX 4090 = sm_89
+set(CUDA_ARCH "89" CACHE STRING "CUDA architecture (89 for RTX 4090)")
 
 # ==============================================================================
 # C++ settings
@@ -67,6 +67,8 @@ add_library(kaldi_fp16
     src/tensor_fp16.cpp
     cuda/kernels.cu
     cuda/cnn_kernels.cu
+    cuda/bridge.cu
+    cuda/ops.cu
 )
 
 target_include_directories(kaldi_fp16 PUBLIC

@@ -187,6 +187,30 @@ kaldi_fp16_cgo/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16_cgo.dir/build.make CMakeFiles/kaldi_fp16_cgo.dir/build
 .PHONY : kaldi_fp16_cgo/fast
 
+cuda/bridge.o: cuda/bridge.cu.o
+.PHONY : cuda/bridge.o
+
+# target to build an object file
+cuda/bridge.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o
+.PHONY : cuda/bridge.cu.o
+
+cuda/bridge.i: cuda/bridge.cu.i
+.PHONY : cuda/bridge.i
+
+# target to preprocess a source file
+cuda/bridge.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.i
+.PHONY : cuda/bridge.cu.i
+
+cuda/bridge.s: cuda/bridge.cu.s
+.PHONY : cuda/bridge.s
+
+# target to generate assembly for a file
+cuda/bridge.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.s
+.PHONY : cuda/bridge.cu.s
+
 cuda/cnn_kernels.o: cuda/cnn_kernels.cu.o
 .PHONY : cuda/cnn_kernels.o
 
@@ -234,6 +258,30 @@ cuda/kernels.s: cuda/kernels.cu.s
 cuda/kernels.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.s
 .PHONY : cuda/kernels.cu.s
+
+cuda/ops.o: cuda/ops.cu.o
+.PHONY : cuda/ops.o
+
+# target to build an object file
+cuda/ops.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o
+.PHONY : cuda/ops.cu.o
+
+cuda/ops.i: cuda/ops.cu.i
+.PHONY : cuda/ops.i
+
+# target to preprocess a source file
+cuda/ops.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.i
+.PHONY : cuda/ops.cu.i
+
+cuda/ops.s: cuda/ops.cu.s
+.PHONY : cuda/ops.s
+
+# target to generate assembly for a file
+cuda/ops.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.s
+.PHONY : cuda/ops.cu.s
 
 src/cgo_interface.o: src/cgo_interface.cu.o
 .PHONY : src/cgo_interface.o
@@ -297,12 +345,18 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... kaldi_fp16"
 	@echo "... kaldi_fp16_cgo"
+	@echo "... cuda/bridge.o"
+	@echo "... cuda/bridge.i"
+	@echo "... cuda/bridge.s"
 	@echo "... cuda/cnn_kernels.o"
 	@echo "... cuda/cnn_kernels.i"
 	@echo "... cuda/cnn_kernels.s"
 	@echo "... cuda/kernels.o"
 	@echo "... cuda/kernels.i"
 	@echo "... cuda/kernels.s"
+	@echo "... cuda/ops.o"
+	@echo "... cuda/ops.i"
+	@echo "... cuda/ops.s"
 	@echo "... src/cgo_interface.o"
 	@echo "... src/cgo_interface.i"
 	@echo "... src/cgo_interface.s"

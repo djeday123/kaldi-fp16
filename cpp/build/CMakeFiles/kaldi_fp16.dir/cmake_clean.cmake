@@ -1,9 +1,13 @@
 file(REMOVE_RECURSE
   "CMakeFiles/kaldi_fp16.dir/cmake_device_link.o"
+  "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o"
+  "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o.d"
   "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o"
   "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o.d"
   "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o"
   "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o.d"
+  "CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o"
+  "CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o.d"
   "CMakeFiles/kaldi_fp16.dir/src/tensor_fp16.cpp.o"
   "CMakeFiles/kaldi_fp16.dir/src/tensor_fp16.cpp.o.d"
   "libkaldi_fp16.pdb"

@@ -8,8 +8,10 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/projects/pr2/kaldi-fp16/cpp/cuda/bridge.cu" "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o.d"
   "/projects/pr2/kaldi-fp16/cpp/cuda/cnn_kernels.cu" "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o.d"
   "/projects/pr2/kaldi-fp16/cpp/cuda/kernels.cu" "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o.d"
+  "/projects/pr2/kaldi-fp16/cpp/cuda/ops.cu" "CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o.d"
   "/projects/pr2/kaldi-fp16/cpp/src/tensor_fp16.cpp" "CMakeFiles/kaldi_fp16.dir/src/tensor_fp16.cpp.o" "gcc" "CMakeFiles/kaldi_fp16.dir/src/tensor_fp16.cpp.o.d"
   )
 

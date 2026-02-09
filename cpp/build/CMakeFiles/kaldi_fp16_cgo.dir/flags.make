@@ -6,5 +6,5 @@ CUDA_DEFINES = -Dkaldi_fp16_cgo_EXPORTS
 
 CUDA_INCLUDES = --options-file CMakeFiles/kaldi_fp16_cgo.dir/includes_CUDA.rsp
 
-CUDA_FLAGS =  --use_fast_math -std=c++17 "--generate-code=arch=compute_89,code=[compute_89,sm_89]" -Xcompiler=-fPIC
+CUDA_FLAGS =  --use_fast_math -O3 -DNDEBUG -std=c++17 "--generate-code=arch=compute_89,code=[compute_89,sm_89]" -Xcompiler=-fPIC
 

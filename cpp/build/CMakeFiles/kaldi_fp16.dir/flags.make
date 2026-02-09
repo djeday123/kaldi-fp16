@@ -7,11 +7,11 @@ CUDA_DEFINES = -Dkaldi_fp16_EXPORTS
 
 CUDA_INCLUDES = --options-file CMakeFiles/kaldi_fp16.dir/includes_CUDA.rsp
 
-CUDA_FLAGS =  --use_fast_math -std=c++17 "--generate-code=arch=compute_89,code=[compute_89,sm_89]" -Xcompiler=-fPIC
+CUDA_FLAGS =  --use_fast_math -O3 -DNDEBUG -std=c++17 "--generate-code=arch=compute_89,code=[compute_89,sm_89]" -Xcompiler=-fPIC
 
 CXX_DEFINES = -Dkaldi_fp16_EXPORTS
 
 CXX_INCLUDES = -I/projects/pr2/kaldi-fp16/cpp/include -isystem /usr/local/cuda-12.8/targets/x86_64-linux/include
 
-CXX_FLAGS = -std=c++17 -fPIC
+CXX_FLAGS = -O3 -DNDEBUG -march=native -std=c++17 -fPIC
 
