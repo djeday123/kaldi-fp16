@@ -2,11 +2,13 @@ package parser
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"strings"
 )
 
 // DebugLevel controls verbosity:
@@ -25,25 +27,86 @@ func debugFull() bool    { return DebugLevel >= 3 }
 
 // Reader читает примеры из ark файла
 type Reader struct {
-	file   *os.File
-	reader *bufio.Reader
+	file     *os.File
+	gzReader *gzip.Reader
+	reader   *bufio.Reader
 }
 
 // NewReader создаёт новый Reader
+// Поддерживает .ark и .ark.gz файлы
+// Автоматически проверяет формат (бинарный vs текстовый)
 func NewReader(path string) (*Reader, error) {
+	// gzip файлы нельзя проверить DetectFormat — они сжатые
+	if !strings.HasSuffix(path, ".gz") {
+		if err := DetectFormat(path); err != nil {
+			return nil, fmt.Errorf("format check failed for %s: %w", path, err)
+		}
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{
-		file:   file,
-		reader: bufio.NewReader(file),
-	}, nil
+
+	r := &Reader{file: file}
+
+	if strings.HasSuffix(path, ".gz") {
+		r.gzReader, err = gzip.NewReader(file)
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("gzip reader failed for %s: %w", path, err)
+		}
+		r.reader = bufio.NewReader(r.gzReader)
+	} else {
+		r.reader = bufio.NewReader(file)
+	}
+
+	return r, nil
 }
 
 // Close закрывает файл
 func (r *Reader) Close() error {
+	if r.gzReader != nil {
+		r.gzReader.Close()
+	}
 	return r.file.Close()
+}
+
+// DetectFormat проверяет что файл бинарный ark, не текстовый
+// Ищет паттерн \0B (binary marker) в первых 256 байтах
+func DetectFormat(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 256)
+	n, err := f.Read(buf)
+	if err != nil || n < 10 {
+		return fmt.Errorf("file too small or unreadable (%d bytes)", n)
+	}
+
+	// Binary ark: "key \0B..." — ищем \0B
+	for i := 0; i < n-1; i++ {
+		if buf[i] == 0x00 && buf[i+1] == 'B' {
+			return nil // binary format confirmed
+		}
+	}
+
+	// Не нашли \0B — проверяем на текстовые признаки
+	hasNewline := false
+	for i := 0; i < n; i++ {
+		if buf[i] == '\n' {
+			hasNewline = true
+			break
+		}
+	}
+	if hasNewline {
+		return fmt.Errorf("text ark format detected (no binary \\0B marker found), only binary ark files supported")
+	}
+
+	return fmt.Errorf("unknown format (no binary \\0B marker found in first %d bytes)", n)
 }
 
 // ReadExample читает следующий пример
@@ -101,7 +164,7 @@ func (r *Reader) parseExample() (*Example, error) {
 	ex := &Example{}
 	var currentIoName string
 	var currentIoSize int
-	//var pendingI1Count int // сколько <I1> тегов ещё ожидаем
+	var currentIndexes []Index
 
 	for {
 		b, err := r.reader.ReadByte()
@@ -150,9 +213,10 @@ func (r *Reader) parseExample() (*Example, error) {
 
 			if mat != nil {
 				io := IoBlock{
-					Name:   currentIoName,
-					Size:   currentIoSize,
-					Matrix: *mat,
+					Name:    currentIoName,
+					Size:    currentIoSize,
+					Indexes: currentIndexes,
+					Matrix:  *mat,
 				}
 				ex.Inputs = append(ex.Inputs, io)
 				if debugMatrix() {
@@ -186,9 +250,17 @@ func (r *Reader) parseExample() (*Example, error) {
 				}
 			case "I1V":
 				count := int(r.readBasicIntValue())
-				currentIoSize = count
-				r.skipIndexVector(count)
-				// После skipIndexVector готовы читать матрицу
+				indexes, err := r.readIndexVector(count)
+				if err != nil {
+					return ex, fmt.Errorf("I1V read error (name=%s): %w", currentIoName, err)
+				}
+				if currentIoName != "" {
+					currentIoSize = count
+					currentIndexes = indexes
+				} else if ex.Supervision.Name != "" {
+					ex.Supervision.Size = count
+					ex.Supervision.Indexes = indexes
+				}
 			case "/NnetIo":
 				currentIoName = ""
 				currentIoSize = 0
@@ -205,7 +277,19 @@ func (r *Reader) parseExample() (*Example, error) {
 			case "LabelDim":
 				ex.Supervision.LabelDim = int(r.readBasicIntValue())
 			case "End2End":
-				ex.Supervision.End2End = r.readBasicIntValue() != 0
+				r.reader.ReadByte() // space
+				e2e, _ := r.reader.ReadByte()
+				ex.Supervision.End2End = (e2e == 'T')
+				if !ex.Supervision.End2End {
+					// Read FST
+					fst := ReadFst(r.reader)
+					if fst == nil {
+						return ex, fmt.Errorf("failed to read FST for example %s", ex.Key)
+					}
+					ex.Supervision.Fst = fst
+				}
+			case "DW", "DW2":
+				ex.Supervision.DerivWeights = readDerivWeights(r.reader, tag)
 			case "/Nnet3ChainEg":
 				debugExampleCount++
 				if debugFull() {
@@ -394,28 +478,71 @@ func (ex *Example) IsUsable() bool {
 	return ex.Validate() && ex.Supervision.Weight > 0 && ex.Supervision.LabelDim == 3080
 }
 
-// skipIndexVector пропускает бинарные индексы после <I1V>
-// Формат: дельта-кодирование, каждый индекс 1 байт (если |delta| < 125)
-// или 1 + 12 байт (если байт == 127)
-func (r *Reader) skipIndexVector(count int) {
-	if debugFull() {
-		fmt.Printf("[DEBUG] skipIndexVector: count=%d\n", count)
+// readIndexVector reads index vector after <I1V> count
+// Format: delta encoding
+// Kaldi writes deltas in range [-124, 124], 127 = long format
+func (r *Reader) readIndexVector(count int) ([]Index, error) {
+	if count <= 0 {
+		return nil, fmt.Errorf("invalid index vector count: %d", count)
 	}
+	indexes := make([]Index, count)
+
 	for i := 0; i < count; i++ {
 		b, err := r.reader.ReadByte()
 		if err != nil {
-			return
+			return indexes[:i], fmt.Errorf("EOF after %d/%d indexes", i, count)
 		}
+
+		c := int8(b)
+
 		if debugFull() && i < 5 {
-			fmt.Printf("[DEBUG] skipIndex[%d]: byte=%d (0x%02x)\n", i, int8(b), b)
+			fmt.Printf("[DEBUG] readIndex[%d]: byte=%d (0x%02x)\n", i, c, b)
 		}
-		if b == 127 {
-			if debugFull() {
-				fmt.Printf("[DEBUG] skipIndex[%d]: long format, skipping 15 bytes\n", i)
+
+		if c == 127 {
+			// Long format: n, t, x as WriteBasicType
+			indexes[i] = Index{
+				N: int(r.readBasicIntValue()),
+				T: int(r.readBasicIntValue()),
+				X: int(r.readBasicIntValue()),
 			}
-			for j := 0; j < 15; j++ {
-				r.reader.ReadByte()
+			if debugFull() {
+				fmt.Printf("[DEBUG] readIndex[%d]: long format n=%d t=%d x=%d\n",
+					i, indexes[i].N, indexes[i].T, indexes[i].X)
+			}
+		} else if c == -128 || (c >= -127 && c <= -125) || c == 125 || c == 126 {
+			// Values outside Kaldi's valid delta range [-124, 124]
+			fmt.Printf("[WARN] readIndex[%d]: unexpected delta byte %d (0x%02x), possible data corruption\n", i, c, b)
+			if i == 0 {
+				indexes[i] = Index{N: 0, T: int(c), X: 0}
+			} else {
+				last := indexes[i-1]
+				indexes[i] = Index{N: last.N, T: last.T + int(c), X: last.X}
+			}
+		} else {
+			// Delta format: t_delta in [-124, 124]
+			if i == 0 {
+				indexes[i] = Index{N: 0, T: int(c), X: 0}
+			} else {
+				last := indexes[i-1]
+				indexes[i] = Index{N: last.N, T: last.T + int(c), X: last.X}
 			}
 		}
 	}
+
+	// Validate: our dataset uses only n=0, x=0
+	for i := range indexes {
+		if indexes[i].N != 0 {
+			fmt.Printf("[WARN] index[%d]: n=%d (merged egs detected, not supported in our pipeline)\n", i, indexes[i].N)
+			break // warn once
+		}
+	}
+	for i := range indexes {
+		if indexes[i].X != 0 {
+			fmt.Printf("[WARN] index[%d]: x=%d (extra dimension detected, not supported in our pipeline)\n", i, indexes[i].X)
+			break // warn once
+		}
+	}
+
+	return indexes, nil
 }

@@ -20,7 +20,8 @@ func charToFloat(p0, p25, p75, p100 float32, value uint8) float32 {
 	} else if value <= 192 {
 		return p25 + (p75-p25)*float32(value-64)*(1.0/128.0)
 	} else {
-		return p75 + (p100-p75)*float32(value-192)*(1.0/63.0)
+		// Branch 3: multiply in float32, divide in double (matches Kaldi)
+		return float32(float64(p75) + float64((p100-p75)*float32(value-192))/63.0)
 	}
 }
 

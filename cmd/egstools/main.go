@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"kaldi-fp16/internal/compare"
@@ -29,6 +31,10 @@ func main() {
 		cmdDump(os.Args[2:])
 	case "verify":
 		cmdVerify(os.Args[2:])
+	case "fst":
+		cmdFst(os.Args[2:])
+	case "totext":
+		cmdToText(os.Args[2:])
 	case "help":
 		printUsage()
 	default:
@@ -51,8 +57,10 @@ Commands:
   all <dir>          Analyze all cegs.*.ark files
   compare <file>     Compare with Kaldi nnet3-chain-copy-egs
   dump <file>        Dump matrix data for verification
-  help               Show this help
   verify <file>      Full verification against Kaldi (all matrix values)
+  fst <file>         Show FST (supervision graph) details
+  totext <file>      Convert to Kaldi text format
+  help               Show this help
 
 Options:
   analyze: -n NUM    Number of examples to show (default: 5)
@@ -65,6 +73,12 @@ Options:
            -v        Verbose output (detailed format)
   verify:  -n NUM    Number of examples to verify (default: 10)
            -t TOL    Tolerance for comparison (default: 0.001)
+  fst:     -n NUM    Example number (default: 1)
+           -s NUM    Number of states to show (default: 10)
+           -a NUM    Number of arcs per state to show (default: 5)
+           -v        Verbose output (detailed format)
+  totext:  -n NUM    Example number (default: 1, 0 for all)
+           -f        Full precision output
 
 Examples:
   egstools analyze -n 10 cegs.1.ark
@@ -251,6 +265,15 @@ func printExample(ex *parser.Example, num int) {
 	}
 	fmt.Printf("  Supervision: weight=%.2f frames=%d labels=%d\n",
 		ex.Supervision.Weight, ex.Supervision.FramesPerSeq, ex.Supervision.LabelDim)
+
+	// Show FST summary if available
+	if ex.Supervision.Fst != nil {
+		fmt.Printf("  FST: states=%d arcs=%d\n",
+			ex.Supervision.Fst.NumStates, ex.Supervision.Fst.NumArcs)
+	}
+	if len(ex.Supervision.DerivWeights) > 0 {
+		fmt.Printf("  DerivWeights: %d values\n", len(ex.Supervision.DerivWeights))
+	}
 }
 
 func cmdDump(args []string) {
@@ -392,5 +415,255 @@ func cmdVerify(args []string) {
 	} else {
 		fmt.Println("❌ Some examples have differences")
 		os.Exit(1)
+	}
+}
+
+func cmdFst(args []string) {
+	fs := flag.NewFlagSet("fst", flag.ExitOnError)
+	num := fs.Int("n", 1, "Example number")
+	numStates := fs.Int("s", 10, "Number of states to show")
+	numArcs := fs.Int("a", 5, "Number of arcs per state to show")
+	verbose := fs.Bool("v", false, "Verbose output (detailed format)")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Println("Usage: egstools fst [-n NUM] [-s STATES] [-a ARCS] <file>")
+		os.Exit(1)
+	}
+
+	reader, err := parser.NewReader(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer reader.Close()
+
+	var ex *parser.Example
+	for i := 1; i <= *num; i++ {
+		ex, err = reader.ReadExample()
+		if err != nil || ex == nil {
+			fmt.Fprintf(os.Stderr, "Error reading example %d\n", i)
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("Example %d: %s\n", *num, ex.Key)
+	fmt.Printf("Supervision: weight=%.2f frames=%d labels=%d e2e=%v\n",
+		ex.Supervision.Weight, ex.Supervision.FramesPerSeq,
+		ex.Supervision.LabelDim, ex.Supervision.End2End)
+
+	if ex.Supervision.Fst == nil {
+		fmt.Println("\nFST: nil (not parsed or end2end=true)")
+		return
+	}
+
+	fst := ex.Supervision.Fst
+
+	if !*verbose {
+		// Kaldi text format (default): from_state to_state ilabel olabel [weight]
+		fmt.Println()
+		for stateIdx, state := range fst.States {
+			for _, arc := range state.Arcs {
+				if arc.Weight != 0 {
+					fmt.Printf("%d\t%d\t%d\t%d\t%g\n", stateIdx, arc.NextState, arc.Label, arc.Label, arc.Weight)
+				} else {
+					fmt.Printf("%d\t%d\t%d\t%d\n", stateIdx, arc.NextState, arc.Label, arc.Label)
+				}
+			}
+			// Final state
+			if !math.IsInf(float64(state.Final), 1) {
+				fmt.Printf("%d\t%g\n", stateIdx, state.Final)
+			}
+		}
+		return
+	}
+
+	// Verbose format
+	fmt.Printf("\nFST: start=%d states=%d arcs=%d properties=0x%x\n",
+		fst.Start, fst.NumStates, fst.NumArcs, fst.Properties)
+
+	// Count finals
+	numFinals := 0
+	for _, s := range fst.States {
+		if !math.IsInf(float64(s.Final), 1) {
+			numFinals++
+		}
+	}
+	fmt.Printf("Final states: %d\n", numFinals)
+
+	// Show states
+	showStates := *numStates
+	if showStates > len(fst.States) {
+		showStates = len(fst.States)
+	}
+	fmt.Printf("\nStates (showing %d of %d):\n", showStates, len(fst.States))
+
+	for i := 0; i < showStates; i++ {
+		s := fst.States[i]
+		finalStr := "inf"
+		if !math.IsInf(float64(s.Final), 1) {
+			finalStr = fmt.Sprintf("%.4f", s.Final)
+		}
+		fmt.Printf("  State %d: %d arcs, final=%s\n", i, len(s.Arcs), finalStr)
+
+		for j, arc := range s.Arcs {
+			if j >= *numArcs {
+				fmt.Printf("    ... and %d more arcs\n", len(s.Arcs)-*numArcs)
+				break
+			}
+			weightStr := ""
+			if arc.Weight != 0 {
+				weightStr = fmt.Sprintf(" w=%.4f", arc.Weight)
+			}
+			fmt.Printf("    -> state %d (label=%d%s)\n", arc.NextState, arc.Label, weightStr)
+		}
+	}
+
+	// DerivWeights info
+	fmt.Printf("\nDerivWeights: %d values\n", len(ex.Supervision.DerivWeights))
+	if len(ex.Supervision.DerivWeights) > 0 {
+		dw := ex.Supervision.DerivWeights
+		if len(dw) <= 10 {
+			fmt.Printf("  Values: %v\n", dw)
+		} else {
+			fmt.Printf("  First 5: %.4f %.4f %.4f %.4f %.4f\n",
+				dw[0], dw[1], dw[2], dw[3], dw[4])
+			fmt.Printf("  Last 5:  %.4f %.4f %.4f %.4f %.4f\n",
+				dw[len(dw)-5], dw[len(dw)-4], dw[len(dw)-3], dw[len(dw)-2], dw[len(dw)-1])
+		}
+	}
+}
+
+func cmdToText(args []string) {
+	fs := flag.NewFlagSet("totext", flag.ExitOnError)
+	num := fs.Int("n", 1, "Example number (0 for all)")
+	fullPrecision := fs.Bool("f", false, "Full precision output")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Println("Usage: egstools totext [-n NUM] <file>")
+		os.Exit(1)
+	}
+
+	reader, err := parser.NewReader(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer reader.Close()
+
+	count := 0
+	for {
+		ex, err := reader.ReadExample()
+		if err != nil || ex == nil {
+			break
+		}
+		count++
+
+		if *num != 0 && count != *num {
+			continue
+		}
+
+		writeExampleText(ex, *fullPrecision)
+
+		if *num != 0 && count == *num {
+			break
+		}
+	}
+}
+
+func writeExampleText(ex *parser.Example, fullPrecision bool) {
+	// Key and header
+	fmt.Printf("%s <Nnet3ChainEg> <NumInputs> %d \n", ex.Key, ex.NumInputs)
+
+	// Inputs
+	for _, inp := range ex.Inputs {
+		fmt.Printf("<NnetIo> %s ", inp.Name)
+		writeIndexVector(inp.Indexes)
+		writeMatrix(inp.Matrix, fullPrecision)
+		fmt.Printf("</NnetIo> \n")
+	}
+
+	// NumOutputs
+	fmt.Printf("<NumOutputs> %d \n", ex.NumOutputs)
+
+	// Supervision
+	sup := ex.Supervision
+	fmt.Printf("<NnetChainSup> %s ", sup.Name)
+	writeIndexVector(sup.Indexes)
+
+	// Supervision block
+	fmt.Printf("<Supervision> <Weight> %g <NumSequences> %d <FramesPerSeq> %d <LabelDim> %d <End2End> ",
+		sup.Weight, sup.NumSequences, sup.FramesPerSeq, sup.LabelDim)
+	if sup.End2End {
+		fmt.Print("T \n")
+	} else {
+		fmt.Print("F \n")
+	}
+
+	// FST
+	if sup.Fst != nil {
+		for stateIdx, state := range sup.Fst.States {
+			for _, arc := range state.Arcs {
+				if arc.Weight != 0 {
+					fmt.Printf("%d\t%d\t%d\t%d\t%s\n", stateIdx, arc.NextState, arc.Label, arc.Label, strconv.FormatFloat(float64(arc.Weight), 'g', 7, 32))
+				} else {
+					fmt.Printf("%d\t%d\t%d\t%d\n", stateIdx, arc.NextState, arc.Label, arc.Label)
+				}
+			}
+			// Final state marker
+			if !math.IsInf(float64(state.Final), 1) {
+				if state.Final == 0 {
+					fmt.Printf("%d\n", stateIdx)
+				} else {
+					fmt.Printf("%d\t%s\n", stateIdx, strconv.FormatFloat(float64(state.Final), 'g', 7, 32))
+				}
+			}
+		}
+	}
+	fmt.Printf("\n</Supervision> ")
+
+	// DerivWeights
+	if len(sup.DerivWeights) > 0 {
+		fmt.Printf("<DW2>  [ ")
+		for _, w := range sup.DerivWeights {
+			if fullPrecision {
+				fmt.Printf("%g ", w)
+			} else {
+				fmt.Printf("%s ", strconv.FormatFloat(float64(w), 'g', 7, 32))
+			}
+		}
+		fmt.Printf("]\n")
+	}
+
+	fmt.Printf("</NnetChainSup> \n")
+	// fmt.Printf("</NnetChainSup> </Nnet3ChainEg> ")
+}
+
+func writeIndexVector(indexes []parser.Index) {
+	fmt.Printf("<I1V> %d ", len(indexes))
+	for _, idx := range indexes {
+		fmt.Printf("<I1> %d %d %d ", idx.N, idx.T, idx.X)
+	}
+}
+
+func writeMatrix(mat parser.MatrixInfo, fullPrecision bool) {
+	fmt.Printf(" [\n")
+	for r := 0; r < mat.Rows; r++ {
+		fmt.Printf("  ")
+		start := r * mat.Cols
+		for c := 0; c < mat.Cols; c++ {
+			v := float64(mat.Data[start+c])
+			if fullPrecision {
+				fmt.Printf("%g ", v)
+			} else {
+				fmt.Printf("%s ", strconv.FormatFloat(v, 'g', 7, 32))
+			}
+		}
+		if r == mat.Rows-1 {
+			fmt.Printf("]\n")
+		} else {
+			fmt.Printf("\n")
+		}
 	}
 }
