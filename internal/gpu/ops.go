@@ -332,3 +332,18 @@ func AddBias(h *Handle, x *Tensor, bias *Tensor) error {
 	// x += ones * bias (accumulate)
 	return GEMM(h, x.Rows, x.Cols, 1, 1.0, ones, bias, 1.0, x)
 }
+
+// SubsampleRows copies every stride-th row starting at rowOffset
+// Returns new tensor [outRows x cols]
+func SubsampleRows(src *Tensor, stride, rowOffset int) (*Tensor, error) {
+	outRows := (src.Rows - rowOffset + stride - 1) / stride
+	dst, err := NewTensor(outRows, src.Cols)
+	if err != nil {
+		return nil, err
+	}
+
+	C.ops_subsample_rows(dst.Ptr, src.Ptr,
+		C.int(src.Rows), C.int(src.Cols),
+		C.int(stride), C.int(rowOffset))
+	return dst, nil
+}

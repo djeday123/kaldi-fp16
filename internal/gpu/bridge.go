@@ -80,7 +80,7 @@ type GPUBatch struct {
 	// Supervision metadata
 	FrameOffsets []int
 	NumFrames    []int
-	FramesPerSeq int
+	FramesPerSeq []int
 	Weight       float32
 	StateOffsets []int32
 }

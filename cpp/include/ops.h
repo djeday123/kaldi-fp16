@@ -9,6 +9,14 @@ extern "C"
 {
 #endif
 
+    // Subsample rows: copy every stride-th row starting at row_offset
+    // dst: [out_rows x cols] FP16
+    // src: [in_rows x cols] FP16
+    // out_rows = (in_rows - row_offset + stride - 1) / stride
+    void ops_subsample_rows(void *dst, const void *src,
+                            int in_rows, int cols,
+                            int stride, int row_offset);
+
     // ============================================================
     // cuBLAS handle
     // ============================================================

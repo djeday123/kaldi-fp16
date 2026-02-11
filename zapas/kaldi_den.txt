@@ -1,0 +1,88 @@
+package nnet
+
+/*
+#cgo LDFLAGS: -L/projects/pr2/kaldi-fp16/test_system -lkaldi_den -Wl,-rpath,/projects/pr2/kaldi-fp16/test_system
+#cgo LDFLAGS: -L/opt/kaldi/src/lib -Wl,-rpath,/opt/kaldi/src/lib
+#cgo LDFLAGS: -lkaldi-chain -lkaldi-cudamatrix -lkaldi-matrix -lkaldi-util -lkaldi-base -lkaldi-fstext -lkaldi-lat -lkaldi-hmm -lkaldi-tree
+#cgo LDFLAGS: -L/opt/kaldi/tools/openfst-1.7.2/lib -Wl,-rpath,/opt/kaldi/tools/openfst-1.7.2/lib -lfst
+#cgo LDFLAGS: -L/usr/local/cuda-12.8/targets/x86_64-linux/lib -Wl,-rpath,/usr/local/cuda-12.8/targets/x86_64-linux/lib -lcudart -lcublas
+#cgo LDFLAGS: -lstdc++ -lm
+#cgo CFLAGS: -I/projects/pr2/kaldi-fp16/test_system
+
+#include "kaldi_den_wrapper.h"
+#include <stdlib.h>
+*/
+import "C"
+import (
+	"fmt"
+	"unsafe"
+)
+
+// KaldiDenominator wraps Kaldi's DenominatorComputation
+type KaldiDenominator struct {
+	handle  unsafe.Pointer
+	numPdfs int
+}
+
+// NewKaldiDenominator loads den.fst and initializes Kaldi denominator
+func NewKaldiDenominator(denFstPath string, numPdfs int) (*KaldiDenominator, error) {
+	cPath := C.CString(denFstPath)
+	defer C.free(unsafe.Pointer(cPath))
+
+	h := C.kaldi_den_init(cPath, C.int(numPdfs))
+	if h == nil {
+		return nil, fmt.Errorf("kaldi_den_init failed")
+	}
+
+	return &KaldiDenominator{
+		handle:  h,
+		numPdfs: numPdfs,
+	}, nil
+}
+
+// Forward computes denominator log-prob
+// nnetOutput: [T, numPdfs] float32, row-major
+func (kd *KaldiDenominator) Forward(nnetOutput []float32, T, numSequences int) (float32, error) {
+	numRows := T * numSequences
+	if len(nnetOutput) != numRows*kd.numPdfs {
+		return 0, fmt.Errorf("nnetOutput size %d != %d*%d", len(nnetOutput), numRows, kd.numPdfs)
+	}
+
+	logprob := C.kaldi_den_forward(
+		kd.handle,
+		(*C.float)(unsafe.Pointer(&nnetOutput[0])),
+		C.int(numRows),
+		C.int(numSequences),
+		C.float(1e-05),
+	)
+	return float32(logprob), nil
+}
+
+// ForwardBackward computes log-prob and gradients
+func (kd *KaldiDenominator) ForwardBackward(nnetOutput []float32, T, numSequences int, derivWeight float32) (float32, []float32, error) {
+	numRows := T * numSequences
+	if len(nnetOutput) != numRows*kd.numPdfs {
+		return 0, nil, fmt.Errorf("nnetOutput size mismatch")
+	}
+
+	grad := make([]float32, numRows*kd.numPdfs)
+
+	logprob := C.kaldi_den_forward_backward(
+		kd.handle,
+		(*C.float)(unsafe.Pointer(&nnetOutput[0])),
+		C.int(numRows),
+		C.int(numSequences),
+		C.float(1e-05),
+		C.float(derivWeight),
+		(*C.float)(unsafe.Pointer(&grad[0])),
+	)
+	return float32(logprob), grad, nil
+}
+
+// Free releases resources
+func (kd *KaldiDenominator) Free() {
+	if kd.handle != nil {
+		C.kaldi_den_free(kd.handle)
+		kd.handle = nil
+	}
+}

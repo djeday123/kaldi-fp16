@@ -81,14 +81,14 @@ func FstToCSR(fst *parser.Fst) (*CSR, error) {
 		for _, arc := range state.Arcs {
 			csr.ColIdx = append(csr.ColIdx, arc.NextState)
 			csr.Labels = append(csr.Labels, arc.Label)
-			csr.Weights = append(csr.Weights, arc.Weight)
+			csr.Weights = append(csr.Weights, -arc.Weight) // negate: tropical → log-prob
 			arcIdx++
 		}
 
 		// Collect final states
 		if !math.IsInf(float64(state.Final), 1) {
 			csr.FinalStates = append(csr.FinalStates, int32(i))
-			csr.FinalWeights = append(csr.FinalWeights, state.Final)
+			csr.FinalWeights = append(csr.FinalWeights, -state.Final) // negate: tropical → log-prob
 		}
 	}
 	csr.RowPtr[numStates] = arcIdx
@@ -129,12 +129,12 @@ func FstToCOO(fst *parser.Fst) (*COO, error) {
 			coo.Rows = append(coo.Rows, int32(i))
 			coo.Cols = append(coo.Cols, arc.NextState)
 			coo.Labels = append(coo.Labels, arc.Label)
-			coo.Weights = append(coo.Weights, arc.Weight)
+			coo.Weights = append(coo.Weights, -arc.Weight) // negate: tropical → log-prob
 		}
 
 		if !math.IsInf(float64(state.Final), 1) {
 			coo.FinalStates = append(coo.FinalStates, int32(i))
-			coo.FinalWeights = append(coo.FinalWeights, state.Final)
+			coo.FinalWeights = append(coo.FinalWeights, -state.Final) // negate: tropical → log-prob
 		}
 	}
 

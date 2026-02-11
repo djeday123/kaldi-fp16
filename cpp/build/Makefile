@@ -211,6 +211,54 @@ cuda/bridge.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.s
 .PHONY : cuda/bridge.cu.s
 
+cuda/chain.o: cuda/chain.cu.o
+.PHONY : cuda/chain.o
+
+# target to build an object file
+cuda/chain.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o
+.PHONY : cuda/chain.cu.o
+
+cuda/chain.i: cuda/chain.cu.i
+.PHONY : cuda/chain.i
+
+# target to preprocess a source file
+cuda/chain.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.i
+.PHONY : cuda/chain.cu.i
+
+cuda/chain.s: cuda/chain.cu.s
+.PHONY : cuda/chain.s
+
+# target to generate assembly for a file
+cuda/chain.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.s
+.PHONY : cuda/chain.cu.s
+
+cuda/chain_den.o: cuda/chain_den.cu.o
+.PHONY : cuda/chain_den.o
+
+# target to build an object file
+cuda/chain_den.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o
+.PHONY : cuda/chain_den.cu.o
+
+cuda/chain_den.i: cuda/chain_den.cu.i
+.PHONY : cuda/chain_den.i
+
+# target to preprocess a source file
+cuda/chain_den.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.i
+.PHONY : cuda/chain_den.cu.i
+
+cuda/chain_den.s: cuda/chain_den.cu.s
+.PHONY : cuda/chain_den.s
+
+# target to generate assembly for a file
+cuda/chain_den.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.s
+.PHONY : cuda/chain_den.cu.s
+
 cuda/cnn_kernels.o: cuda/cnn_kernels.cu.o
 .PHONY : cuda/cnn_kernels.o
 
@@ -348,6 +396,12 @@ help:
 	@echo "... cuda/bridge.o"
 	@echo "... cuda/bridge.i"
 	@echo "... cuda/bridge.s"
+	@echo "... cuda/chain.o"
+	@echo "... cuda/chain.i"
+	@echo "... cuda/chain.s"
+	@echo "... cuda/chain_den.o"
+	@echo "... cuda/chain_den.i"
+	@echo "... cuda/chain_den.s"
 	@echo "... cuda/cnn_kernels.o"
 	@echo "... cuda/cnn_kernels.i"
 	@echo "... cuda/cnn_kernels.s"

@@ -352,6 +352,8 @@ func (net *Network) forwardBatchNorm(layer *Layer, input *gpu.Tensor, T int) (*g
 
 // SpecAugment: mask features during training
 func (net *Network) forwardSpecAugment(layer *Layer, input *gpu.Tensor, T int) (*gpu.Tensor, error) {
+	_ = layer
+	_ = T
 	// TODO: implement frequency and time masking on GPU
 	// For now, pass-through (masking is a training-only augmentation)
 	return input, nil

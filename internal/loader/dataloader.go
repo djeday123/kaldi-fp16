@@ -18,8 +18,9 @@ type TrainingBatch struct {
 	Ivectors *batch.MergedMatrix // [batch_size, ivector_dim]
 
 	// FST supervision в sparse формате
-	FstCSR       *sparse.CSR // объединённый FST для всего батча
-	StateOffsets []int32     // смещение состояний каждого примера в merged FST
+	FstCSR       *sparse.CSR   // объединённый FST для всего батча
+	PerSeqCSRs   []*sparse.CSR // individual FSTs per sequence (for chain loss)
+	StateOffsets []int32       // смещение состояний каждого примера в merged FST
 
 	// Метаданные
 	FrameOffsets []int // начало фреймов каждого примера
@@ -28,7 +29,8 @@ type TrainingBatch struct {
 	LabelDim     int   // число PDF (макс label + 1)
 
 	// Supervision info (одинаковые для всех примеров в батче)
-	FramesPerSeq int
+	FramesPerSeq []int
+	NumSequences int
 	Weight       float32
 
 	// Ключи (для отладки)
@@ -141,7 +143,7 @@ func (dl *DataLoader) NextBatch() (*TrainingBatch, error) {
 	}
 
 	// 3. Конвертируем FST → sparse и мержим
-	fstCSR, stateOffsets, err := mergeFSTs(examples)
+	fstCSR, perSeqCSRs, stateOffsets, err := mergeFSTs(examples)
 	if err != nil {
 		return nil, fmt.Errorf("FST merge failed: %w", err)
 	}
@@ -151,18 +153,21 @@ func (dl *DataLoader) NextBatch() (*TrainingBatch, error) {
 		Features:     b.Features,
 		Ivectors:     b.Ivectors,
 		FstCSR:       fstCSR,
+		PerSeqCSRs:   perSeqCSRs,
 		StateOffsets: stateOffsets,
 		FrameOffsets: b.FrameOffsets,
 		NumFrames:    b.NumFrames,
 		BatchSize:    len(examples),
 		LabelDim:     fstCSR.LabelDim(),
-		FramesPerSeq: examples[0].Supervision.FramesPerSeq,
+		FramesPerSeq: make([]int, len(examples)),
+		NumSequences: examples[0].Supervision.NumSequences,
 		Weight:       examples[0].Supervision.Weight,
 		Keys:         make([]string, len(examples)),
 	}
 
 	for i, ex := range examples {
 		tb.Keys[i] = ex.Key
+		tb.FramesPerSeq[i] = ex.Supervision.FramesPerSeq
 	}
 
 	dl.batchesServed++
@@ -244,27 +249,29 @@ func validateExample(ex *parser.Example) error {
 }
 
 // mergeFSTs конвертирует и мержит FST из всех примеров
-func mergeFSTs(examples []*parser.Example) (*sparse.CSR, []int32, error) {
+func mergeFSTs(examples []*parser.Example) (*sparse.CSR, []*sparse.CSR, []int32, error) {
 	coos := make([]*sparse.COO, len(examples))
+	perSeqCSRs := make([]*sparse.CSR, len(examples))
 
 	for i, ex := range examples {
 		coo, err := sparse.FstToCOO(ex.Supervision.Fst)
 		if err != nil {
-			return nil, nil, fmt.Errorf("example %d (%s): %w", i, ex.Key, err)
+			return nil, nil, nil, fmt.Errorf("example %d (%s): %w", i, ex.Key, err)
 		}
 		coos[i] = coo
+		perSeqCSRs[i] = sparse.COOToCSR(coo)
 	}
 
 	merged, offsets, err := sparse.MergeCOO(coos)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	csr := sparse.COOToCSR(merged)
 
 	if err := csr.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("merged CSR validation failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("merged CSR validation failed: %w", err)
 	}
 
-	return csr, offsets, nil
+	return csr, perSeqCSRs, offsets, nil
 }

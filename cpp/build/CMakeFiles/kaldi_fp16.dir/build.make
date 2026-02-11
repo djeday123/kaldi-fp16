@@ -143,13 +143,45 @@ CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.s"
 	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
 
+CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o: CMakeFiles/kaldi_fp16.dir/flags.make
+CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o: CMakeFiles/kaldi_fp16.dir/includes_CUDA.rsp
+CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o: /projects/pr2/kaldi-fp16/cpp/cuda/chain.cu
+CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o: CMakeFiles/kaldi_fp16.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CUDA object CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o"
+	/usr/local/cuda-12.8/bin/nvcc -forward-unknown-to-host-compiler $(CUDA_DEFINES) $(CUDA_INCLUDES) $(CUDA_FLAGS) -MD -MT CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o -MF CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o.d -x cu -rdc=true -c /projects/pr2/kaldi-fp16/cpp/cuda/chain.cu -o CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o
+
+CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CUDA source to CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.i"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_PREPROCESSED_SOURCE
+
+CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.s"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
+
+CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o: CMakeFiles/kaldi_fp16.dir/flags.make
+CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o: CMakeFiles/kaldi_fp16.dir/includes_CUDA.rsp
+CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o: /projects/pr2/kaldi-fp16/cpp/cuda/chain_den.cu
+CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o: CMakeFiles/kaldi_fp16.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CUDA object CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o"
+	/usr/local/cuda-12.8/bin/nvcc -forward-unknown-to-host-compiler $(CUDA_DEFINES) $(CUDA_INCLUDES) $(CUDA_FLAGS) -MD -MT CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o -MF CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o.d -x cu -rdc=true -c /projects/pr2/kaldi-fp16/cpp/cuda/chain_den.cu -o CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o
+
+CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CUDA source to CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.i"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_PREPROCESSED_SOURCE
+
+CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CUDA source to assembly CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.s"
+	$(CMAKE_COMMAND) -E cmake_unimplemented_variable CMAKE_CUDA_CREATE_ASSEMBLY_SOURCE
+
 # Object files for target kaldi_fp16
 kaldi_fp16_OBJECTS = \
 "CMakeFiles/kaldi_fp16.dir/src/tensor_fp16.cpp.o" \
 "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o" \
 "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o" \
 "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o" \
-"CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o"
+"CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o" \
+"CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o" \
+"CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o"
 
 # External object files for target kaldi_fp16
 kaldi_fp16_EXTERNAL_OBJECTS =
@@ -159,6 +191,8 @@ CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/cuda/ke
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o
+CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o
+CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/build.make
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: /usr/local/cuda-12.8/targets/x86_64-linux/lib/libcudart.so
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: /usr/local/cuda-12.8/targets/x86_64-linux/lib/libcublas.so
@@ -167,7 +201,7 @@ CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: /usr/local/cuda-12.8/targets/x86_
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/deviceLinkLibs.rsp
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/deviceObjects1.rsp
 CMakeFiles/kaldi_fp16.dir/cmake_device_link.o: CMakeFiles/kaldi_fp16.dir/dlink.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CUDA device code CMakeFiles/kaldi_fp16.dir/cmake_device_link.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Linking CUDA device code CMakeFiles/kaldi_fp16.dir/cmake_device_link.o"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/kaldi_fp16.dir/dlink.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
@@ -180,7 +214,9 @@ kaldi_fp16_OBJECTS = \
 "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o" \
 "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o" \
 "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o" \
-"CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o"
+"CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o" \
+"CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o" \
+"CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o"
 
 # External object files for target kaldi_fp16
 kaldi_fp16_EXTERNAL_OBJECTS =
@@ -190,6 +226,8 @@ libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o
 libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o
 libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o
 libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o
+libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o
+libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o
 libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/build.make
 libkaldi_fp16.so: /usr/local/cuda-12.8/targets/x86_64-linux/lib/libcudart.so
 libkaldi_fp16.so: /usr/local/cuda-12.8/targets/x86_64-linux/lib/libcublas.so
@@ -197,7 +235,7 @@ libkaldi_fp16.so: /usr/local/cuda-12.8/targets/x86_64-linux/lib/libcublasLt.so
 libkaldi_fp16.so: /usr/local/cuda-12.8/targets/x86_64-linux/lib/libculibos.a
 libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/cmake_device_link.o
 libkaldi_fp16.so: CMakeFiles/kaldi_fp16.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Linking CXX shared library libkaldi_fp16.so"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Linking CXX shared library libkaldi_fp16.so"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/kaldi_fp16.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

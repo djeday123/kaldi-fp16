@@ -134,7 +134,7 @@ func TestMergeFSTs_Basic(t *testing.T) {
 		makeTrainingExample("ex3", 150),
 	}
 
-	csr, offsets, err := mergeFSTs(examples)
+	csr, _, offsets, err := mergeFSTs(examples)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestMergeFSTs_LabelDim(t *testing.T) {
 		makeTrainingExample("ex1", 150),
 	}
 
-	csr, _, err := mergeFSTs(examples)
+	csr, _, _, err := mergeFSTs(examples)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestTrainingBatch_FullPipeline(t *testing.T) {
 	}
 
 	// Merge FSTs
-	csr, offsets, err := mergeFSTs(examples)
+	csr, _, offsets, err := mergeFSTs(examples)
 	if err != nil {
 		t.Fatal(err)
 	}

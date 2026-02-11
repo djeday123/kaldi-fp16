@@ -1,0 +1,350 @@
+package nnet
+
+/*
+#cgo CFLAGS: -I${SRCDIR}/../../cpp/include
+#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lkaldi_fp16_cgo -lcublas -lcudart -lstdc++
+
+#include "chain_den.h"
+#include <stdlib.h>
+*/
+import "C"
+
+import (
+	"bufio"
+	"fmt"
+	"math"
+	"os"
+	"unsafe"
+
+	"kaldi-fp16/internal/parser"
+)
+
+// ============================================================
+// NativeDenominator — replaces KaldiDenominator (Kaldi wrapper)
+// with pure Go + native CUDA implementation.
+//
+// No dependency on Kaldi C++ libraries.
+// ============================================================
+
+// DenTransition represents one arc in the denominator HMM
+type DenTransition struct {
+	Src       int32
+	Dst       int32
+	PdfId     int32   // 0-indexed
+	TransProb float32 // exp(-arc.weight) — probability space
+}
+
+// NativeDenominator holds denominator graph and GPU data
+type NativeDenominator struct {
+	transitions  []DenTransition
+	initialProbs []float32 // [numStates] from 100-iter HMM warmup
+	numStates    int
+	numPdfs      int
+	startState   int
+
+	// GPU handle
+	gpuFst   C.DenFstGPU
+	uploaded bool
+}
+
+// NewNativeDenominator loads den.fst and computes initial probs
+func NewNativeDenominator(denFstPath string, numPdfs int) (*NativeDenominator, error) {
+	// 1. Load den.fst via parser (handles both compact_acceptor and vector format)
+	f, err := os.Open(denFstPath)
+	if err != nil {
+		return nil, fmt.Errorf("open den.fst: %w", err)
+	}
+	defer f.Close()
+
+	fst := parser.ReadFst(bufio.NewReader(f))
+	if fst == nil {
+		return nil, fmt.Errorf("failed to parse den.fst (unsupported format?)")
+	}
+
+	fmt.Printf("[den-native] Loaded den.fst: %d states, %d arcs, start=%d\n",
+		fst.NumStates, fst.NumArcs, fst.Start)
+
+	// 2. Extract transitions: iterate states → arcs, convert weights
+	//    Label in FST = pdf-id (1-indexed in Kaldi) → subtract 1 for 0-indexed
+	//    Weight in FST = tropical semiring (-log_prob) → exp(-weight) for probability
+	transitions := make([]DenTransition, 0, fst.NumArcs)
+	for stateIdx, state := range fst.States {
+		for _, arc := range state.Arcs {
+			pdfId := arc.Label - 1 // 1-indexed → 0-indexed
+			if pdfId < 0 {
+				continue // skip epsilon arcs (label=0)
+			}
+			tp := float32(math.Exp(float64(-arc.Weight))) // tropical → probability
+			transitions = append(transitions, DenTransition{
+				Src:       int32(stateIdx),
+				Dst:       arc.NextState,
+				PdfId:     pdfId,
+				TransProb: tp,
+			})
+		}
+	}
+
+	nd := &NativeDenominator{
+		transitions: transitions,
+		numStates:   int(fst.NumStates),
+		numPdfs:     numPdfs,
+		startState:  int(fst.Start),
+	}
+
+	fmt.Printf("[den-native] Extracted %d transitions (from %d arcs)\n",
+		len(transitions), fst.NumArcs)
+
+	// 3. Compute initial probs (100-iter HMM warmup on CPU)
+	nd.computeInitialProbs()
+
+	// Debug: print initial probs stats
+	sum := sumFloat32(nd.initialProbs)
+	mx := maxFloat32(nd.initialProbs)
+	mn := minNonZeroFloat32(nd.initialProbs)
+	nz := countNonZero(nd.initialProbs)
+	fmt.Printf("[den-native] Initial probs: sum=%.6f, max=%.6e, min_nonzero=%.6e, nonzero=%d/%d\n",
+		sum, mx, mn, nz, nd.numStates)
+
+	// 4. Upload transitions to GPU
+	if err := nd.uploadToGPU(); err != nil {
+		return nil, fmt.Errorf("upload to GPU: %w", err)
+	}
+
+	return nd, nil
+}
+
+// computeInitialProbs implements Kaldi's DenominatorGraph::SetInitialProbs()
+//
+// Approximates stationary distribution via 100 iterations of HMM propagation.
+// Uses float64 for numerical stability (Kaldi uses double internally).
+//
+// Reference: Kaldi src/chain/chain-den-graph.cc lines 30-60
+func (nd *NativeDenominator) computeInitialProbs() {
+	S := nd.numStates
+
+	curProb := make([]float64, S)
+	nextProb := make([]float64, S)
+	avgProb := make([]float64, S)
+
+	// Start from the designated start state
+	curProb[nd.startState] = 1.0
+
+	for iter := 0; iter < 100; iter++ {
+		// Accumulate into average (1/100 of each iteration)
+		for s := 0; s < S; s++ {
+			avgProb[s] += curProb[s] / 100.0
+		}
+
+		// Zero next
+		for s := range nextProb {
+			nextProb[s] = 0
+		}
+
+		// Propagate through all transitions
+		for _, t := range nd.transitions {
+			nextProb[t.Dst] += curProb[t.Src] * float64(t.TransProb)
+		}
+
+		// Normalize
+		total := 0.0
+		for _, v := range nextProb {
+			total += v
+		}
+		if total > 0 {
+			invTotal := 1.0 / total
+			for s := range nextProb {
+				nextProb[s] *= invTotal
+			}
+		}
+
+		// Swap
+		curProb, nextProb = nextProb, curProb
+	}
+
+	// Convert to float32
+	nd.initialProbs = make([]float32, S)
+	for s := 0; s < S; s++ {
+		nd.initialProbs[s] = float32(avgProb[s])
+	}
+}
+
+// uploadToGPU uploads transition data in Structure-of-Arrays format
+func (nd *NativeDenominator) uploadToGPU() error {
+	n := len(nd.transitions)
+	if n == 0 {
+		return fmt.Errorf("no transitions to upload")
+	}
+
+	// Convert AoS → SoA
+	src := make([]int32, n)
+	dst := make([]int32, n)
+	pdf := make([]int32, n)
+	tp := make([]float32, n)
+
+	for i, t := range nd.transitions {
+		src[i] = t.Src
+		dst[i] = t.Dst
+		pdf[i] = t.PdfId
+		tp[i] = t.TransProb
+	}
+
+	ret := C.den_fst_upload(
+		&nd.gpuFst,
+		(*C.int32_t)(unsafe.Pointer(&src[0])),
+		(*C.int32_t)(unsafe.Pointer(&dst[0])),
+		(*C.int32_t)(unsafe.Pointer(&pdf[0])),
+		(*C.float)(unsafe.Pointer(&tp[0])),
+		C.int(n),
+		C.int(nd.numStates),
+		C.int(nd.numPdfs),
+	)
+	if ret != 0 {
+		errStr := C.den_last_error()
+		if errStr != nil {
+			defer C.den_clear_error()
+			return fmt.Errorf("den_fst_upload: %s", C.GoString(errStr))
+		}
+		return fmt.Errorf("den_fst_upload failed")
+	}
+
+	nd.uploaded = true
+	fmt.Printf("[den-native] Uploaded %d transitions to GPU\n", n)
+	return nil
+}
+
+// Forward computes denominator log-prob (no gradients)
+// nnetOutput: [T × numPdfs] float32 (row-major)
+func (nd *NativeDenominator) Forward(nnetOutput []float32, T, numSequences int) (float32, error) {
+	if !nd.uploaded {
+		return 0, fmt.Errorf("GPU data not uploaded")
+	}
+
+	// Validate size
+	numRows := T * numSequences
+	expected := numRows * nd.numPdfs
+	if len(nnetOutput) != expected {
+		return 0, fmt.Errorf("nnetOutput size %d != %d (T=%d × seq=%d × pdfs=%d)",
+			len(nnetOutput), expected, T, numSequences, nd.numPdfs)
+	}
+
+	// TODO: multi-sequence support (process each with its own T)
+	// For now: single sequence
+	if numSequences != 1 {
+		return 0, fmt.Errorf("multi-sequence not yet supported (got %d)", numSequences)
+	}
+
+	logprob := C.den_forward(
+		&nd.gpuFst,
+		(*C.float)(unsafe.Pointer(&nnetOutput[0])),
+		(*C.float)(unsafe.Pointer(&nd.initialProbs[0])),
+		C.int(T),
+		C.float(1e-05),
+	)
+
+	return float32(logprob), nil
+}
+
+// ForwardBackward computes log-prob and denominator posteriors
+// Returns (logprob, gradients[T×numPdfs], error)
+func (nd *NativeDenominator) ForwardBackward(nnetOutput []float32, T, numSequences int, derivWeight float32) (float32, []float32, error) {
+	if !nd.uploaded {
+		return 0, nil, fmt.Errorf("GPU data not uploaded")
+	}
+
+	numRows := T * numSequences
+	expected := numRows * nd.numPdfs
+	if len(nnetOutput) != expected {
+		return 0, nil, fmt.Errorf("nnetOutput size %d != %d", len(nnetOutput), expected)
+	}
+
+	if numSequences != 1 {
+		return 0, nil, fmt.Errorf("multi-sequence not yet supported (got %d)", numSequences)
+	}
+
+	grad := make([]float32, numRows*nd.numPdfs)
+
+	logprob := C.den_forward_backward(
+		&nd.gpuFst,
+		(*C.float)(unsafe.Pointer(&nnetOutput[0])),
+		(*C.float)(unsafe.Pointer(&nd.initialProbs[0])),
+		C.int(T),
+		C.float(1e-05),
+		(*C.float)(unsafe.Pointer(&grad[0])),
+	)
+
+	// Apply deriv_weight scaling
+	if derivWeight != 1.0 {
+		for i := range grad {
+			grad[i] *= derivWeight
+		}
+	}
+
+	return float32(logprob), grad, nil
+}
+
+// Free releases GPU memory
+func (nd *NativeDenominator) Free() {
+	if nd.uploaded {
+		C.den_fst_free(&nd.gpuFst)
+		nd.uploaded = false
+	}
+}
+
+// NumStates returns the number of HMM states in the denominator
+func (nd *NativeDenominator) NumStates() int {
+	return nd.numStates
+}
+
+// InitialProbs returns the stationary distribution
+func (nd *NativeDenominator) InitialProbs() []float32 {
+	return nd.initialProbs
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+func sumFloat32(a []float32) float64 {
+	s := 0.0
+	for _, v := range a {
+		s += float64(v)
+	}
+	return s
+}
+
+func maxFloat32(a []float32) float64 {
+	if len(a) == 0 {
+		return 0
+	}
+	m := float64(a[0])
+	for _, v := range a[1:] {
+		if float64(v) > m {
+			m = float64(v)
+		}
+	}
+	return m
+}
+
+func minNonZeroFloat32(a []float32) float64 {
+	m := math.MaxFloat64
+	for _, v := range a {
+		fv := float64(v)
+		if fv > 0 && fv < m {
+			m = fv
+		}
+	}
+	if m == math.MaxFloat64 {
+		return 0
+	}
+	return m
+}
+
+func countNonZero(a []float32) int {
+	n := 0
+	for _, v := range a {
+		if v > 0 {
+			n++
+		}
+	}
+	return n
+}

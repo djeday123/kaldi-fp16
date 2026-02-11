@@ -9,6 +9,8 @@ set(CMAKE_DEPENDS_LANGUAGES
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/projects/pr2/kaldi-fp16/cpp/cuda/bridge.cu" "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/bridge.cu.o.d"
+  "/projects/pr2/kaldi-fp16/cpp/cuda/chain.cu" "CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.o.d"
+  "/projects/pr2/kaldi-fp16/cpp/cuda/chain_den.cu" "CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.o.d"
   "/projects/pr2/kaldi-fp16/cpp/cuda/cnn_kernels.cu" "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/cnn_kernels.cu.o.d"
   "/projects/pr2/kaldi-fp16/cpp/cuda/kernels.cu" "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/kernels.cu.o.d"
   "/projects/pr2/kaldi-fp16/cpp/cuda/ops.cu" "CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o" "gcc" "CMakeFiles/kaldi_fp16.dir/cuda/ops.cu.o.d"

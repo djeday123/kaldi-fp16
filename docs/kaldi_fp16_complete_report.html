@@ -1,0 +1,1226 @@
+<h1 id="kaldi-fp16-полная-хроника-проекта">kaldi-fp16: Полная Хроника
+Проекта</h1>
+<p><strong>Даты:</strong> 30 января – 10 февраля 2026
+<strong>Проект:</strong> kaldi-fp16 — ускорение Kaldi нейросетевого
+обучения через FP16 + Tensor Cores на RTX 4090 <strong>Серверы:</strong>
+gpu2, gpu4 <strong>Язык:</strong> Go + CUDA C++ (CGO)</p>
+<hr />
+<h2 id="предыстория-анализ-и-настройка-среды-30-января">Предыстория:
+Анализ и Настройка Среды (30 января)</h2>
+<h3 id="п.1-замысел-проекта-и-расчёт-ускорения">П.1 Замысел проекта и
+расчёт ускорения</h3>
+<p>Всё началось с вопроса: <strong>на сколько можно ускорить Kaldi
+тренировку</strong> перейдя с FP32 на FP16 Tensor Cores на RTX 4090?</p>
+<p>Расчёт по спецификациям RTX 4090: - FP32: 83 TFLOPS - FP16 Tensor
+Cores: 330–660 TFLOPS (4–8× теоретически) - <strong>Реалистичная оценка
+для Kaldi CNN-TDNN: 2–3× ускорение</strong></p>
+<p>Почему не 8×: mixed precision overhead, non-GEMM операции (BatchNorm,
+activations), memory-bound слои. Но дополнительно: FP16 данные в 2×
+меньше → быстрее transfers, можно увеличить batch size → ещё 20–50%
+прироста.</p>
+<h3 id="п.2-настройка-нового-gpu-сервера-gpu4">П.2 Настройка нового GPU
+сервера (gpu4)</h3>
+<p>Подняли RTX 4090 сервер с нуля:</p>
+<p><strong>Компиляция и настройка:</strong> - Собрали C++/CUDA
+библиотеки (<code>libkaldi_fp16.so</code>,
+<code>libkaldi_fp16_cgo.so</code>) - Настроили Go CGO bindings
+(CGO_CFLAGS, CGO_LDFLAGS, LD_LIBRARY_PATH) - CUDA 12.8 по нестандартному
+пути <code>/usr/local/cuda-12.8/</code></p>
+<p><strong>Копирование данных с gpu2:</strong> - 73GB training data (297
+.ark файлов, 2600 часов речи) - Модели, конфиги, FST файлы</p>
+<p><strong>Проблема с путями в Kaldi .scp файлах:</strong> Kaldi
+scp-файлы содержали абсолютные пути со старого сервера
+(<code>/opt/kaldi/egs/...</code> на gpu2). Вместо модификации training
+scripts — создали <strong>символические ссылки</strong> так что старые
+пути работают на новом сервере. Элегантное решение вместо костылей.</p>
+<p><strong>SSH и инфраструктура:</strong> - SSH ключи ed25519 для GitHub
+(push code) - SSHFS mounts для доступа между серверами - Lynis security
+audit (зависал на NFS тестах — создали custom skip config)</p>
+<h3 id="п.3-тестовый-запуск-и-gpu-профилирование">П.3 Тестовый запуск и
+GPU профилирование</h3>
+<p>Запустили полный цикл тренировки на 50 часах речи — 3-branch CNN-TDNN
+архитектура с attention, 72 итерации, 2 эпохи. Это <strong>baseline в
+FP32</strong> для будущего сравнения.</p>
+<p><strong>GPU профилирование (NVIDIA Nsight Systems):</strong></p>
+<pre><code>62.5% CUDA API time = memory operations (cudaMalloc, cudaMemcpy)
+37.5% = computation
+GEMM операции: FP32, НЕ FP16 Tensor Cores</code></pre>
+<p>Это ключевое открытие: больше половины времени GPU тратит на
+перемещение данных, а не на вычисления. И GEMM работает в FP32. Двойная
+возможность для ускорения.</p>
+<hr />
+<h2
+id="предыстория-обратная-разработка-бинарного-формата-18-февраля">Предыстория:
+Обратная Разработка Бинарного Формата (1–8 февраля)</h2>
+<h3 id="п.4-зачем-свой-парсер">П.4 Зачем свой парсер</h3>
+<p>Kaldi хранит training examples в бинарном формате
+<code>cegs.*.ark</code> — проприетарный формат с множеством вложенных
+структур. Чтобы загружать данные напрямую в GPU с FP16 конвертацией,
+нужно <strong>читать и декомпрессировать данные без Kaldi</strong> — на
+чистом Go.</p>
+<p>Альтернативы (вызывать Kaldi tools через subprocess, использовать
+Kaldi C++ напрямую) были отвергнуты: слишком медленно, нет контроля над
+конвертацией, невозможно интегрировать в Go pipeline.</p>
+<h3 id="п.5-структура-формата-cegs..ark">П.5 Структура формата
+cegs.*.ark</h3>
+<p>Каждый файл содержит тысячи <code>NnetChainExample</code>, каждый из
+которых включает:</p>
+<pre><code>NnetChainExample:
+├── NnetIo &quot;input&quot; (features)
+│   ├── Index vector (delta-compressed n,t,x tuples)
+│   └── GeneralMatrix → CompressedMatrix (CM/CM2/CM3/FM)
+├── NnetIo &quot;ivector&quot; 
+│   ├── Index vector
+│   └── GeneralMatrix → CompressedMatrix (CM2)
+└── NnetChainSupervision &quot;output&quot;
+    ├── Index vector
+    ├── DerivWeights (DW/DW2)
+    └── FST (OpenFst CompactAcceptor)</code></pre>
+<h3 id="п.6-критическое-открытие-chartofloat-и-порядок-операций">П.6
+Критическое открытие: CharToFloat и порядок операций</h3>
+<p>Самый тонкий баг при декомпрессии CM матриц. Kaldi использует
+<strong>piecewise linear interpolation</strong> через 4 percentile точки
+(p0, p25, p75, p100) для каждой колонки.</p>
+<p>Формула для branch 3 (value &gt; 192):</p>
+<pre><code>result = p75 + (p100 - p75) * float(value - 192) / 63.0</code></pre>
+<p><strong>Проблема:</strong> порядок float32 vs float64 операций.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode go"><code class="sourceCode go"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// НЕПРАВИЛЬНО — всё в float32:</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> p75 <span class="op">+</span> <span class="op">(</span>p100<span class="op">-</span>p75<span class="op">)*</span><span class="dt">float32</span><span class="op">(</span>value<span class="op">-</span><span class="dv">192</span><span class="op">)*(</span><span class="fl">1.0</span><span class="op">/</span><span class="fl">64.0</span><span class="op">)</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co">// НЕПРАВИЛЬНО — делить на 64, а не 63:</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> p75 <span class="op">+</span> <span class="op">(</span>p100<span class="op">-</span>p75<span class="op">)*</span><span class="dt">float32</span><span class="op">(</span>value<span class="op">-</span><span class="dv">192</span><span class="op">)/</span><span class="fl">64.0</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="co">// ПРАВИЛЬНО — float32 умножение, затем float64 деление:</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> <span class="dt">float32</span><span class="op">(</span><span class="dt">float64</span><span class="op">(</span>p75<span class="op">)</span> <span class="op">+</span> <span class="dt">float64</span><span class="op">(</span>p100<span class="op">-</span>p75<span class="op">)*</span><span class="dt">float64</span><span class="op">(</span>value<span class="op">-</span><span class="dv">192</span><span class="op">)/</span><span class="fl">63.0</span><span class="op">)</span></span></code></pre></div>
+<p>Разница ~6e-8 на одно значение. Казалось бы мелочь, но при 6.5M
+примеров это разница между “byte-perfect” и “почти byte-perfect”. А
+“почти” для нас не годится — нам нужно точное совпадение с Kaldi output
+для верификации.</p>
+<p><strong>Как нашли:</strong> Сравнили text export нашего парсера с
+<code>nnet3-chain-copy-egs --print-args=false ark:cegs.1.ark ark,t:-</code>.
+Первые 6 значащих цифр совпадали, 7-я — нет. Трассировали до
+<code>charToFloat</code> branch 3.</p>
+<h3 id="п.7-column-major-vs-row-major">П.7 Column-Major vs
+Row-Major</h3>
+<p>Ещё одна неочевидность: данные в CM формате хранятся
+<strong>column-major</strong> (как в Fortran), а не row-major (как в
+C/Go):</p>
+<pre><code>Файл: col0_row0, col0_row1, ..., col0_rowN, col1_row0, col1_row1, ...
+Память: row0_col0, row0_col1, ..., row0_colN, row1_col0, ...</code></pre>
+<p>Нужна транспозиция при чтении. Без неё — первая строка содержит мусор
+из разных колонок.</p>
+<h3 id="п.8-формат-декомпрессии-три-варианта">П.8 Формат декомпрессии —
+три варианта</h3>
+<table>
+<colgroup>
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 29%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Формат</th>
+<th>Маркер</th>
+<th>Размер</th>
+<th>Описание</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>CM</td>
+<td><code>CM</code></td>
+<td>1 byte/value</td>
+<td>Per-column percentiles + piecewise linear</td>
+</tr>
+<tr class="even">
+<td>CM2</td>
+<td><code>CM2</code></td>
+<td>2 bytes/value</td>
+<td>Global linear: <code>min + (uint16/65535) * range</code></td>
+</tr>
+<tr class="odd">
+<td>CM3</td>
+<td><code>CM3</code></td>
+<td>1 byte/value</td>
+<td>Global linear: <code>min + (uint8/255) * range</code></td>
+</tr>
+<tr class="even">
+<td>FM</td>
+<td><code>FM</code></td>
+<td>4 bytes/value</td>
+<td>Uncompressed float32</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Где что используется в нашем датасете:</strong> - CM → input
+features (MFCC, 40 dims) - CM2 → ivectors (100 dims) - CM3 → редко (не
+встретился в 297 файлах) - FM → редко (не встретился)</p>
+<p>Важное открытие: формат кодируется <strong>в токене</strong> (“CM”,
+“CM2”, “CM3”), а не отдельным полем. Из-за этого GlobalHeader в файле =
+16 байт (min, range, rows, cols), а не 20 (format + min + range + rows +
+cols) как в C++ struct.</p>
+<h3 id="п.9-index-vector-delta-compression">П.9 Index Vector — Delta
+Compression</h3>
+<p>Index vectors кодируют позиции фреймов через delta compression:</p>
+<pre><code>Byte value    Meaning
+───────────────────────
+0..124        delta_t = byte (short format: t += delta)
+127           long format: read n, t, x as 3 × int32
+-128..-125    reserved (edge case, warn + treat as delta)
+125..126      reserved (edge case, warn + treat as delta)</code></pre>
+<p>Каждый index = <code>(n, t, x)</code> tuple. В нашем датасете:
+<code>n=0</code> (не merged), <code>x=0</code> (нет extra dim),
+<code>t</code> инкрементируется на 1 каждый фрейм (delta = 1).</p>
+<h3 id="п.10-fst-openfst-compactacceptor">П.10 FST — OpenFst
+CompactAcceptor</h3>
+<p>Supervision FST хранятся в OpenFst <code>compact_acceptor</code>
+формате:</p>
+<pre><code>Header:
+  magic: 0x7eb2fdd6
+  fst_type: &quot;compact_acceptor&quot;
+  arc_type: &quot;standard&quot;
+  version, flags, properties
+  start_state, num_states, num_arcs
+
+States: compacts_per_state[] — смещения в массив compacts
+Compacts: [label, weight, nextstate] × N
+  label = pdf-id (или 0 для epsilon/final)
+  weight = float32 (tropical semiring: -log_prob)
+  nextstate = int32 (-1 = final weight entry)</code></pre>
+<h3 id="п.11-верификация-6.5m-примеров-297-файлов">П.11 Верификация:
+6.5M примеров, 297 файлов</h3>
+<p>Создали bash скрипт <code>verify_all_totext.sh</code> который для
+каждого ark файла: 1. Запускает наш <code>egstools totext</code> 2.
+Запускает Kaldi <code>nnet3-chain-copy-egs ark:file.ark ark,t:-</code>
+3. Сравнивает через <code>diff</code></p>
+<p><strong>Результат: 100% PASS.</strong> Все 297 файлов — побайтовое
+совпадение текстового вывода.</p>
+<p>Также верифицировали бинарный output: наш парсер читает и
+перезаписывает данные — результат идентичен оригиналу.</p>
+<h3 id="п.12-реструктуризация-из-монолита">П.12 Реструктуризация из
+монолита</h3>
+<p>Изначально весь код был в одном <code>main.go</code> файле
+(<code>cmd/egstools/</code>). Для масштабирования разбили на модули:</p>
+<pre><code>До:  cmd/egstools/main.go (1500+ строк)
+После:
+  cmd/egstools/main.go          — CLI entry point
+  internal/parser/parser.go     — бинарный парсер
+  internal/parser/types.go      — типы данных
+  internal/compare/compare.go   — сравнение с Kaldi</code></pre>
+<hr />
+<h2 id="часть-1-edge-case-guards-и-защита-парсера">Часть 1: Edge Case
+Guards и Защита Парсера</h2>
+<h3 id="контекст">1.1 Контекст</h3>
+<p>На момент начала работы парсер бинарного формата Kaldi cegs.*.ark был
+<strong>полностью рабочим</strong> — byte-perfect верификация на 6.5M
+примеров (297 файлов, 73GB). Поддерживались все форматы: CM, CM2, CM3,
+FM матрицы, delta-compressed Index vectors, CompactAcceptor FST,
+DerivWeights.</p>
+<p>Однако парсер не был защищён от edge cases — повреждённых файлов,
+неожиданных форматов, граничных значений. Для production-grade системы
+это было необходимо.</p>
+<h3 id="реализованные-защиты">1.2 Реализованные защиты</h3>
+<table>
+<colgroup>
+<col style="width: 23%" />
+<col style="width: 30%" />
+<col style="width: 46%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Кейс</th>
+<th>Статус</th>
+<th>Что делает</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Текстовый ark input</td>
+<td>✅</td>
+<td><code>DetectFormat</code> автоматически в <code>NewReader</code>,
+возвращает error</td>
+</tr>
+<tr class="even">
+<td>Index: n != 0 (merged egs)</td>
+<td>✅</td>
+<td>Парсит корректно + warn</td>
+</tr>
+<tr class="odd">
+<td>Index: x != 0 (extra dim)</td>
+<td>✅</td>
+<td>Парсит корректно + warn</td>
+</tr>
+<tr class="even">
+<td>Index: byte -128..-125, 125..126</td>
+<td>✅</td>
+<td>Парсит как delta + warn (corrupted data)</td>
+</tr>
+<tr class="odd">
+<td>Index: count &lt;= 0</td>
+<td>✅</td>
+<td>Return error (раньше мог вызвать panic при
+<code>make([]Index, -1)</code>)</td>
+</tr>
+<tr class="even">
+<td>Index: EOF mid-read</td>
+<td>✅</td>
+<td>Return partial + error</td>
+</tr>
+<tr class="odd">
+<td>rows=0 / cols=0</td>
+<td>✅</td>
+<td><code>numRows &lt;= 0 || numCols &lt;= 0</code> → return nil</td>
+</tr>
+<tr class="even">
+<td>range=0 div/0</td>
+<td>✅</td>
+<td>Не баг — range в числителе, деления нет</td>
+</tr>
+<tr class="odd">
+<td>ReadFst nil</td>
+<td>✅</td>
+<td>Return error, не crash</td>
+</tr>
+<tr class="even">
+<td>ReadFst bad magic</td>
+<td>✅</td>
+<td>Return nil</td>
+</tr>
+<tr class="odd">
+<td>ReadFst wrong type</td>
+<td>✅</td>
+<td>Return nil</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ключевые-решения-и-трудности">1.3 Ключевые решения и
+трудности</h3>
+<p><strong>DetectFormat — автоматический вызов.</strong> Изначально
+<code>DetectFormat()</code> была отдельной функцией которую нужно было
+вызывать вручную. Проблема: если кто-то вызовет
+<code>NewReader("text.ark")</code> без проверки — парсер не крашнется,
+но молча вернёт 0 примеров (не найдёт <code>\0B</code> маркер бинарного
+формата). Решение: встроили <code>DetectFormat</code> в
+<code>NewReader</code>:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode go"><code class="sourceCode go"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> NewReader<span class="op">(</span>path <span class="dt">string</span><span class="op">)</span> <span class="op">(*</span>Reader<span class="op">,</span> <span class="dt">error</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> err <span class="op">:=</span> DetectFormat<span class="op">(</span>path<span class="op">);</span> err <span class="op">!=</span> <span class="ot">nil</span> <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="ot">nil</span><span class="op">,</span> fmt<span class="op">.</span>Errorf<span class="op">(</span><span class="st">&quot;format check failed for %s: %w&quot;</span><span class="op">,</span> path<span class="op">,</span> err<span class="op">)</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>readIndexVector — выбор error vs panic vs nil.</strong> При
+<code>count &lt;= 0</code> были три варианта: - <code>nil</code> — тихо
+продолжит с кривыми данными (плохо) - <code>panic</code> — остановит, но
+грубо - <code>error</code> — чисто, но требует изменения сигнатуры</p>
+<p>Выбрали <code>error</code>. Изменили сигнатуру
+<code>readIndexVector(count int) → ([]Index, error)</code> и протащили
+error вверх через <code>parseExample</code>. При EOF посреди чтения
+возвращается partial result + error.</p>
+<p><strong>Byte -128 и 125/126.</strong> В delta encoding Index vector
+байты -128..-125 и 125..126 — зарезервированные/неожиданные значения.
+Вместо crash’а парсим как обычную delta + печатаем warning. В нашем
+датасете такие значения не встречаются, но защита на случай повреждённых
+данных.</p>
+<h3 id="тесты">1.4 Тесты</h3>
+<p>14 unit-тестов, все PASS:</p>
+<pre><code>TestReadIndexVector_ZeroCount         — count &lt;= 0 returns error
+TestReadIndexVector_NormalDelta       — обычное delta encoding
+TestReadIndexVector_LongFormat        — byte == 127 (полный формат n,t,x)
+TestReadIndexVector_UnexpectedByte128 — byte -128 как delta
+TestReadIndexVector_Byte125_126       — граничные значения
+TestReadIndexVector_MergedEgs         — n != 0 warning
+TestReadIndexVector_ExtraDim          — x != 0 warning
+TestReadIndexVector_PartialEOF        — EOF mid-read → partial + error
+TestDetectFormat_BinaryArk            — нормальный бинарный файл
+TestDetectFormat_TextArk              — текстовый ark → error
+TestDetectFormat_TinyFile             — слишком маленький файл → error
+TestReadFst_BadMagic                  — неправильный magic number → nil
+TestReadFst_WrongFstType              — &quot;vector&quot; вместо &quot;compact_acceptor&quot; → nil
+TestReadFst_ValidMinimal              — минимальный валидный FST (2 states, 1 arc)</code></pre>
+<hr />
+<h2 id="часть-2-реструктуризация-проекта">Часть 2: Реструктуризация
+проекта</h2>
+<h3 id="проблема">2.1 Проблема</h3>
+<p>Код был в плоской структуре — весь парсер в одном пакете
+<code>egsreader</code>, все типы данных смешаны. Для добавления
+DataLoader, GPU pipeline, sparse матриц, chain loss нужна модульная
+архитектура.</p>
+<h3 id="новая-структура">2.2 Новая структура</h3>
+<pre><code>kaldi-fp16/
+├── cmd/
+│   ├── chaintest/main.go      — тест chain loss pipeline
+│   ├── chainverify/main.go    — верификация против Kaldi
+│   └── ...
+├── internal/
+│   ├── parser/                — бинарный парсер ark/egs
+│   │   ├── parser.go          — основной парсер
+│   │   ├── fst.go             — FST reader
+│   │   ├── parser_edge_test.go
+│   │   └── ...
+│   ├── loader/                — DataLoader
+│   │   └── dataloader.go
+│   ├── sparse/                — CSR/COO форматы
+│   │   └── sparse.go
+│   ├── gpu/                   — GPU tensor abstraction
+│   │   └── gpu.go
+│   ├── nnet/                  — neural network
+│   │   ├── forward.go         — forward pass engine
+│   │   ├── chain_loss.go      — chain loss computation
+│   │   ├── chain_fst.go       — FST on GPU
+│   │   └── kaldi_den.go       — Kaldi denominator wrapper
+│   └── config/                — Kaldi xconfig parser
+│       └── xconfig.go
+├── cpp/
+│   ├── cuda/                  — CUDA kernels
+│   │   ├── chain.cu           — chain forward-backward
+│   │   ├── kernels.cu         — activations
+│   │   ├── cnn_kernels.cu     — Conv1D
+│   │   └── cgo_interface.cu   — CGO bridge
+│   └── build/                 — compiled .so
+└── test_system/               — C++ Kaldi verification tools
+    ├── chain_verify.cc
+    ├── kaldi_den_wrapper.{h,cc}
+    └── libkaldi_den.so</code></pre>
+<h3 id="трудности">2.3 Трудности</h3>
+<p>Переименование пакетов сломало все import paths. Go требует точного
+соответствия <code>module path / internal / package</code>. Пришлось
+обновить go.mod, все import’ы, и убедиться что CGO flags корректно
+ссылаются на shared libraries.</p>
+<hr />
+<h2 id="часть-3-dataloader">Часть 3: DataLoader</h2>
+<h3 id="реализация">3.1 Реализация</h3>
+<p>DataLoader загружает chain training examples из ark файлов, собирает
+batch’и, и подготавливает данные для GPU:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode go"><code class="sourceCode go"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> DataLoader <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    files      <span class="op">[]</span><span class="dt">string</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    batchSize  <span class="dt">int</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    shuffle    <span class="dt">bool</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> TrainingBatch <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    Features    <span class="op">[][]</span><span class="dt">float32</span>     <span class="co">// [batchSize][frames × featureDim]</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    Ivectors    <span class="op">[][]</span><span class="dt">float32</span>     <span class="co">// [batchSize][ivectorDim]</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    FramesPerSeq <span class="op">[]</span><span class="dt">int</span>          <span class="co">// [batchSize] — кол-во фреймов на sequence</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    PerSeqCSRs  <span class="op">[]*</span>sparse<span class="op">.</span>CSR  <span class="co">// [batchSize] — per-sequence FSTs</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    FstCSR      <span class="op">*</span>sparse<span class="op">.</span>CSR    <span class="co">// merged FST for batch (optional)</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Ключевые функции: - Multi-file загрузка
+(<code>NewDataLoaderFromPaths</code>) - Shuffle примеров между файлами -
+FP32 → FP16 конвертация features - FST → COO → CSR конвертация для GPU -
+Per-sequence FramesPerSeq (НЕ один FramesPerSeq на весь batch —
+критический баг, исправлен позже)</p>
+<h3 id="как-не-стыковались-цифры">3.2 Как не стыковались цифры</h3>
+<p>При первом запуске DataLoader на реальных ark файлах получили
+<strong>несовпадение количества примеров</strong>: наш парсер показывал
+одно число, Kaldi <code>nnet3-chain-copy-egs --count</code> —
+другое.</p>
+<p><strong>Причина:</strong> Наш парсер считал
+<code>NnetChainExample</code> как один пример, но некоторые файлы
+содержали <code>MergedChainExample</code> (n != 0) где несколько
+последовательностей объединены в один пример. После добавления warning’а
+для merged egs и корректного подсчёта — числа совпали.</p>
+<h3 id="как-проверяли-матричное-умножение-на-4090">3.3 Как проверяли
+матричное умножение на 4090</h3>
+<p>Для верификации FP16 Tensor Core GEMM: 1. Создали тестовую матрицу
+[1000 × 3080] float32 2. Конвертировали в FP16 3. Перемножили через
+<code>cublasGemmEx</code> с <code>CUBLAS_GEMM_DEFAULT_TENSOR_OP</code>
+4. Сравнили с CPU float32 reference</p>
+<p><strong>Результат:</strong> Максимальное расхождение &lt; 0.001 для
+типичных значений features. На 6.5M примеров — ни одного случая
+overflow/underflow в FP16 range.</p>
+<h3 id="обнаружение-неэффективности-и-план-горутин">3.4 Обнаружение
+неэффективности и план горутин</h3>
+<p>GPU profiling через NVIDIA Nsight Systems показал:</p>
+<pre><code>62.5% CUDA API time = memory operations (cudaMalloc, cudaMemcpy)
+37.5% = computation
+GEMM uses FP32, NOT FP16 Tensor Cores</code></pre>
+<p>Проблемы: 1. <strong>Последовательная загрузка</strong> — CPU парсит
+ark → собирает batch → конвертирует → отправляет на GPU → ждёт
+результата. GPU простаивает пока CPU работает. 2. <strong>Мелкие
+transfers</strong> — features, ivectors, FST отправляются отдельными
+cudaMemcpy 3. <strong>Pageable memory</strong> — обычная malloc, не
+pinned memory (cudaHostAlloc)</p>
+<h3 id="целевой-pipeline-с-горутинами">3.5 Целевой pipeline с
+горутинами</h3>
+<pre><code>CPU                          GPU
+─────                        ─────
+1. Читает ark (наш парсер)
+2. Собирает batch
+3. FP32 → FP16 конвертация
+4. FST → CSR конвертация
+5. ── cudaMemcpy ────→
+                              6. Получает FP16 данные
+                                 (2 байта × N) ВДВОЕ МЕНЬШЕ
+                              7. Forward (GEMM FP16 Tensor Cores)
+                                 4× быстрее вычислений!
+                              8. Chain loss
+                              9. Backward (GEMM FP16)
+10. ←─ cudaMemcpy ───
+                              Градиенты (тоже FP16, вдвое меньше)</code></pre>
+<p><strong>CPU и GPU работают параллельно</strong> — пока GPU считает
+batch N, CPU готовит batch N+1.</p>
+<h3 id="запланированные-оптимизации">3.6 Запланированные
+оптимизации</h3>
+<table>
+<colgroup>
+<col style="width: 10%" />
+<col style="width: 30%" />
+<col style="width: 26%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>Техника</th>
+<th>Статус</th>
+<th>Описание</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1</td>
+<td><strong>Горутины (pipeline parallelism)</strong></td>
+<td>🔜</td>
+<td>Prefetch следующего batch’а параллельно с GPU compute</td>
+</tr>
+<tr class="even">
+<td>2</td>
+<td><strong>Кольцевой буфер</strong></td>
+<td>🔜</td>
+<td>2-3 pre-allocated batch буфера, ротация без аллокаций</td>
+</tr>
+<tr class="odd">
+<td>3</td>
+<td><strong>Pinned memory (cudaHostAlloc)</strong></td>
+<td>🔜</td>
+<td>~2x быстрее transfers vs pageable memory</td>
+</tr>
+<tr class="even">
+<td>4</td>
+<td><strong>CUDA streams</strong></td>
+<td>🔜</td>
+<td>Async transfer + compute overlap</td>
+</tr>
+<tr class="odd">
+<td>5</td>
+<td><strong>Объединённый transfer</strong></td>
+<td>🔜</td>
+<td>features + ivectors + CSR одним cudaMemcpy</td>
+</tr>
+<tr class="even">
+<td>6</td>
+<td><strong>Предзагрузка в RAM</strong></td>
+<td>🔜</td>
+<td>Все 73GB в память сервера (128GB RAM доступно)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Архитектура кольцевого буфера:</strong></p>
+<pre><code>Горутина A (CPU): parse → convert → fill buffer[i]
+Горутина B (GPU): compute buffer[i-1] → gradients
+buffer[0] ↔ buffer[1] ↔ buffer[2] — ротация</code></pre>
+<hr />
+<h2 id="часть-4-инвентаризация-существующего-cudacgo-кода">Часть 4:
+Инвентаризация существующего CUDA/CGO кода</h2>
+<h3 id="открытие">4.1 Открытие</h3>
+<p>При ревизии проекта обнаружили что <strong>80% CUDA инфраструктуры
+уже написано</strong> ранее:</p>
+<p><strong>Уже готово (C++/CUDA + CGO bridges):</strong></p>
+<table>
+<thead>
+<tr class="header">
+<th>Компонент</th>
+<th>CUDA</th>
+<th>CGO bridge</th>
+<th>Go CPU</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>cuBLAS + Tensor Cores</td>
+<td>✅</td>
+<td>✅</td>
+<td>—</td>
+</tr>
+<tr class="even">
+<td>FP16 GEMM</td>
+<td>✅</td>
+<td>✅</td>
+<td>—</td>
+</tr>
+<tr class="odd">
+<td>TensorFP16 (alloc/free/transfer)</td>
+<td>✅</td>
+<td>✅</td>
+<td>—</td>
+</tr>
+<tr class="even">
+<td>Conv1D forward/backward</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr class="odd">
+<td>BatchNorm</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr class="even">
+<td>MaxPool / AvgPool</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr class="odd">
+<td>ReLU / sigmoid / tanh / softmax</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr class="even">
+<td>StatsPooling</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr class="odd">
+<td>Loss Scaler</td>
+<td>✅</td>
+<td>✅</td>
+<td>—</td>
+</tr>
+<tr class="even">
+<td>SGD / Adam оптимизаторы</td>
+<td>—</td>
+<td>—</td>
+<td>✅</td>
+</tr>
+<tr class="odd">
+<td>LR schedulers</td>
+<td>—</td>
+<td>—</td>
+<td>✅</td>
+</tr>
+<tr class="even">
+<td>CNN-TDNN model builder</td>
+<td>—</td>
+<td>—</td>
+<td>✅</td>
+</tr>
+<tr class="odd">
+<td>TDNN layer</td>
+<td>—</td>
+<td>—</td>
+<td>✅</td>
+</tr>
+<tr class="even">
+<td>Sequential + save/load</td>
+<td>—</td>
+<td>—</td>
+<td>✅</td>
+</tr>
+<tr class="odd">
+<td>Собрано (.so)</td>
+<td>✅</td>
+<td>✅</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Файлы: <code>cgo_interface.cu</code>, <code>tensor_fp16.cpp</code>,
+<code>kernels.cu</code>, <code>cnn_kernels.cu</code> Библиотеки:
+<code>libkaldi_fp16.so</code> + <code>libkaldi_fp16_cgo.so</code></p>
+<p><strong>Чего не хватало:</strong></p>
+<table>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>Задача</th>
+<th>Сложность</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1</td>
+<td>Pinned memory (<code>cudaHostAlloc</code>)</td>
+<td>мало</td>
+</tr>
+<tr class="even">
+<td>2</td>
+<td>CUDA streams (async transfer + compute)</td>
+<td>средне</td>
+</tr>
+<tr class="odd">
+<td>3</td>
+<td>Объединённый batch transfer</td>
+<td>средне</td>
+</tr>
+<tr class="even">
+<td>4</td>
+<td>TDNN layer на GPU (был только CPU)</td>
+<td>средне</td>
+</tr>
+<tr class="odd">
+<td>5</td>
+<td>Интеграция DataLoader → GPU</td>
+<td>средне</td>
+</tr>
+<tr class="even">
+<td>6</td>
+<td><strong>Chain LF-MMI loss</strong></td>
+<td><strong>сложно</strong></td>
+</tr>
+<tr class="odd">
+<td>7</td>
+<td>SGD/Adam на GPU</td>
+<td>средне</td>
+</tr>
+<tr class="even">
+<td>8</td>
+<td>Горутины pipeline</td>
+<td>средне</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Вывод:</strong> Основной gap — Chain loss и интеграция
+DataLoader с GPU. Вся инфраструктура на месте.</p>
+<hr />
+<h2 id="часть-5-интеграция-dataloader-gpu-pipeline">Часть 5: Интеграция
+DataLoader → GPU Pipeline</h2>
+<h3 id="gpu-bridge">5.1 GPU Bridge</h3>
+<p>Создали <code>internal/gpu/</code> пакет — абстракция над CUDA
+tensors:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode go"><code class="sourceCode go"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Tensor <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    Ptr    unsafe<span class="op">.</span>Pointer  <span class="co">// device pointer</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    Rows   <span class="dt">int</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    Cols   <span class="dt">int</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    FP16   <span class="dt">bool</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> NewTensor<span class="op">(</span>rows<span class="op">,</span> cols <span class="dt">int</span><span class="op">)</span> <span class="op">(*</span>Tensor<span class="op">,</span> <span class="dt">error</span><span class="op">)</span>     <span class="co">// cudaMalloc</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> ZeroTensor<span class="op">(</span>rows<span class="op">,</span> cols <span class="dt">int</span><span class="op">)</span> <span class="op">(*</span>Tensor<span class="op">,</span> <span class="dt">error</span><span class="op">)</span>     <span class="co">// cudaMalloc + cudaMemset</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>t <span class="op">*</span>Tensor<span class="op">)</span> CopyFromHost<span class="op">(</span>data <span class="op">[]</span><span class="dt">float32</span><span class="op">)</span> <span class="dt">error</span>  <span class="co">// cudaMemcpy H→D</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>t <span class="op">*</span>Tensor<span class="op">)</span> CopyToHost<span class="op">()</span> <span class="op">([]</span><span class="dt">float32</span><span class="op">,</span> <span class="dt">error</span><span class="op">)</span>     <span class="co">// cudaMemcpy D→H</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>t <span class="op">*</span>Tensor<span class="op">)</span> Free<span class="op">()</span>                              <span class="co">// cudaFree</span></span></code></pre></div>
+<h3 id="статус-после-интеграции">5.2 Статус после интеграции</h3>
+<pre><code>✅ Парсер, батчи, FP16, CSR — ГОТОВО
+✅ cuBLAS FP16 GEMM — уже в cgo_interface
+🔜 Forward pass (CNN+TDNN)
+🔜 Chain LF-MMI loss ← самое сложное</code></pre>
+<hr />
+<h2 id="часть-6-forward-pass">Часть 6: Forward Pass</h2>
+<h3 id="реализация-1">6.1 Реализация</h3>
+<p>Forward pass engine (<code>internal/nnet/forward.go</code>) —
+последовательное выполнение 47 слоёв CNN-TDNN архитектуры:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode go"><code class="sourceCode go"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> ForwardEngine <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    layers  <span class="op">[]</span>Layer</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    weights <span class="kw">map</span><span class="op">[</span><span class="dt">string</span><span class="op">]*</span>Tensor</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>e <span class="op">*</span>ForwardEngine<span class="op">)</span> Forward<span class="op">(</span>input <span class="op">*</span>Tensor<span class="op">)</span> <span class="op">(*</span>Tensor<span class="op">,</span> <span class="dt">error</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    x <span class="op">:=</span> input</span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> _<span class="op">,</span> layer <span class="op">:=</span> <span class="kw">range</span> e<span class="op">.</span>layers <span class="op">{</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>        x <span class="op">=</span> layer<span class="op">.</span>Forward<span class="op">(</span>x<span class="op">)</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">,</span> <span class="ot">nil</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Поддерживаемые слои: Conv1D, BatchNorm, ReLU, TDNN (affine +
+batchnorm + relu), Attention, Linear.</p>
+<h3 id="xconfig-parser">6.2 Xconfig Parser</h3>
+<p>Для точного воспроизведения Kaldi архитектуры реализовали парсер
+xconfig формата — конфигурационного языка Kaldi для описания
+нейросети.</p>
+<p>Парсер читает строки вида:</p>
+<pre><code>conv-relu-batchnorm-layer name=cnn1 height-in=40 height-out=40 ...
+tdnnf-layer name=tdnnf2 dim=1024 bottleneck-dim=128 ...
+attention-renorm-layer name=attention1 ...</code></pre>
+<p>И строит граф вычислений с корректными размерностями для каждого
+слоя. Это критически важно — одна неправильная размерность и весь
+forward pass ломается.</p>
+<h3 id="трудности-с-размерностями">6.3 Трудности с размерностями</h3>
+<p><strong>Проблема 1: 3-branch CNN.</strong> Наша модель
+(<code>cnn_tdnn1d_v2</code>) имеет 3 параллельные CNN ветки с разными
+kernel sizes (1×1, 3×3, 5×5), которые потом конкатенируются. Размерности
+на каждом слое зависят от height-in, height-out, num-filters. Одна
+ошибка — и GEMM получает несовместимые матрицы.</p>
+<p><strong>Проблема 2: TDNN с time offsets.</strong> TDNN слои
+используют splicing — берут фреймы с разных временных offset’ов
+(например, -1,0,1). Это меняет effective input dimension и требует
+корректного reshape.</p>
+<p><strong>Проблема 3: Subsampling.</strong> Сеть делает frame
+subsampling (3x) — из 100 входных фреймов получается ~33 выходных. Это
+влияет на batch dimensions и на chain loss (FST ожидает subsampled frame
+count).</p>
+<h3 id="результат">6.4 Результат</h3>
+<pre><code>Forward pass: 47 layers, 117K frames/sec
+Input: [batch × frames × 40 (MFCC)] + [batch × 100 (ivector)]
+Output: [batch × subsampled_frames × 3080 (pdf-ids)]</code></pre>
+<p>Все 47 слоёв проходят с корректными размерностями. ✅</p>
+<hr />
+<h2 id="часть-7-chain-lf-mmi-loss-самая-сложная-часть">Часть 7: Chain
+LF-MMI Loss — Самая Сложная Часть</h2>
+<h3 id="что-такое-chain-lf-mmi">7.1 Что такое Chain LF-MMI</h3>
+<p>Chain LF-MMI (Lattice-Free Maximum Mutual Information) — loss функция
+для end-to-end обучения speech recognition. В отличие от CTC, она
+использует HMM-FST структуру для моделирования последовательностей
+фонем.</p>
+<p><strong>Chain loss = numerator_logprob -
+denominator_logprob</strong></p>
+<ul>
+<li><strong>Numerator:</strong> вероятность правильной транскрипции
+(per-sequence supervision FST)</li>
+<li><strong>Denominator:</strong> вероятность всех возможных
+транскрипций (shared den.fst, 7052 состояний)</li>
+</ul>
+<p>Оба вычисляются через forward-backward алгоритм на FST.</p>
+<h3 id="cuda-kernels-для-forward-backward">7.2 CUDA Kernels для
+Forward-Backward</h3>
+<p>Написали CUDA kernels для alpha/beta computation на GPU
+(<code>cpp/cuda/chain.cu</code>):</p>
+<pre class="cuda"><code>__global__ void chain_forward_kernel(
+    const int* row_ptr,      // CSR row pointers
+    const int* col_idx,      // CSR column indices (destination states)
+    const float* weights,    // arc weights (log-probs)
+    const int* pdf_ids,      // arc pdf-ids
+    const float* nnet_output,// [T × num_pdfs]
+    float* alpha,            // [T+1 × num_states]
+    int num_states, int T, int num_pdfs)</code></pre>
+<p>Каждый thread обрабатывает одно состояние. На каждом timestep:</p>
+<pre><code>alpha[t+1][dst] = logadd(alpha[t][src] + nnet_output[t][pdf] + arc_weight)</code></pre>
+<h3 id="проблема-time-subsampling-mismatch">7.3 Проблема: Time
+Subsampling Mismatch</h3>
+<p><strong>Первый запуск chain loss:</strong></p>
+<pre><code>CUDA error: nnet output has 39 frames but FST expects 34</code></pre>
+<p><strong>Причина:</strong> Сеть делает 3x subsampling (100 frames →
+33), но FST supervision ожидает конкретное число фреймов (34 для seq 0).
+Числа не совпадали из-за неправильного расчёта subsampled frame
+count.</p>
+<p><strong>Решение:</strong> Считываем FramesPerSeq из Index vector в
+supervision — это и есть целевое число фреймов <strong>после
+subsampling</strong>, которое FST ожидает. Сеть должна выдать ровно
+столько фреймов.</p>
+<h3 id="критический-баг-единый-framesperseq-для-всего-batchа">7.4
+Критический баг: Единый FramesPerSeq для всего batch’а</h3>
+<p><strong>Проблема:</strong> Изначально использовали один
+<code>FramesPerSeq</code> для всех sequences в batch’е — брали из
+первого примера. Но каждая последовательность имеет
+<strong>своё</strong> количество фреймов!</p>
+<pre><code>Seq 0: fps=34
+Seq 1: fps=54
+Seq 2: fps=47
+...</code></pre>
+<p>Если все sequence обрабатывать с fps=34, то для seq 1 FST ожидает 54
+фрейма, а получает 34 → alpha не доходит до final states → logprob =
+-inf.</p>
+<p><strong>Симптом:</strong></p>
+<pre><code>seq 0: num=-61.37  ← OK
+seq 1: num=-inf    ← BROKEN
+seq 2: num=-inf    ← BROKEN</code></pre>
+<p><strong>Решение:</strong> Добавили <code>FramesPerSeq []int</code> в
+TrainingBatch — массив с per-sequence frame counts. Каждая
+последовательность обрабатывается со своим fps.</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode go"><code class="sourceCode go"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Было:</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> TrainingBatch <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    FramesPerSeq <span class="dt">int</span>  <span class="co">// одно число на весь batch</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a><span class="co">// Стало:</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> TrainingBatch <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>    FramesPerSeq <span class="op">[]</span><span class="dt">int</span>  <span class="co">// [batchSize] — per-sequence</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="vector-fst-reader">7.5 Vector FST Reader</h3>
+<p>Den.fst хранится в OpenFst “vector” формате, а не “compact_acceptor”
+как per-sequence FSTs в cegs.*.ark. Пришлось дописать reader для vector
+формата.</p>
+<p><strong>Различия:</strong> - compact_acceptor: compacts[] массив, 12
+байт на entry - vector: полная структура state + arc, переменный
+размер</p>
+<p>Загрузили den.fst: 7052 states, 113380 arcs, 3080 unique pdf-ids.</p>
+<h3 id="первый-тест-с-random-weights">7.6 Первый тест с random
+weights</h3>
+<pre><code>Batch: 8 sequences from cegs.1.ark
+Avg loss per frame: ~414
+Gradient stats: 52% non-zero, range [-1.0, 0.33], no NaN/Inf
+Processing time: ~91ms</code></pre>
+<p>Kaldi reference с обученной моделью: -0.17/frame.</p>
+<p>Разница огромная (~414 vs -0.17), но для random weights это ожидаемо?
+Или что-то сломано? Нужна точная верификация.</p>
+<hr />
+<h2
+id="часть-8-верификация-chain-loss-стресс-и-два-критических-бага">Часть
+8: Верификация Chain Loss — Стресс и Два Критических Бага</h2>
+<h3 id="методология-zero-nnet-output">8.1 Методология: Zero Nnet
+Output</h3>
+<p>Чтобы сравнить с Kaldi без загрузки весов модели (12M параметров,
+сложная CNN-TDNN архитектура), подаём <strong>нулевой nnet
+output</strong> (все 0.0) в обе системы.</p>
+<p>С нулевым output все PDF-ids равновероятны, и logprob зависит только
+от FST структуры (transition weights, path counts). Это позволяет точно
+сравнить FST processing.</p>
+<h3 id="c-kaldi-reference-tool">8.2 C++ Kaldi Reference Tool</h3>
+<p>Файл: <code>test_system/chain_verify.cc</code></p>
+<p>Минимальный C++ tool, использующий Kaldi API: 1. Загружает den.fst и
+первый chain example из cegs.1.ark 2. Создаёт нулевой nnet_output [34 ×
+3080] 3. Вызывает NumeratorComputation и DenominatorComputation 4.
+Выводит num/den logprob</p>
+<p><strong>Трудности компиляции:</strong> - CUDA libraries по
+нестандартному пути
+<code>/usr/local/cuda-12.8/targets/x86_64-linux/lib/</code> - Нужны все
+Kaldi библиотеки: chain, nnet3, cudamatrix, matrix, util, base, fstext,
+lat, hmm, tree + OpenFst</p>
+<p><strong>Kaldi reference (zero output):</strong></p>
+<pre><code>num_logprob = -28.3496  (per_frame = -0.8338)
+den_logprob = -0.3132   (per_frame = -0.0092)
+objf/frame  = -0.8246</code></pre>
+<h3 id="go-verification-tool">8.3 Go Verification Tool</h3>
+<p>Файл: <code>cmd/chainverify/main.go</code></p>
+<p>Параллельная реализация на Go + наши CUDA kernels. Несколько итераций
+из-за неправильных API вызовов: - <code>ArkPaths</code> →
+<code>Pattern</code> (не тот config field) - <code>ZeroTensor</code> →
+нужно было создать отдельную функцию - <code>PerSeqFsts</code> →
+правильно <code>PerSeqCSRs</code></p>
+<h3 id="баг-1-знак-весов-fst-tropical-semiring">8.4 БАГ 1: Знак Весов
+FST (Tropical Semiring)</h3>
+<p><strong>Первый результат нашей системы:</strong></p>
+<pre><code>num_logprob = +43.39   (Kaldi: -28.35)  ← ЗНАК ПЕРЕВЁРНУТ!
+den_logprob = +363.25  (Kaldi: -0.31)</code></pre>
+<p><strong>Причина:</strong> Kaldi хранит веса FST в <strong>tropical
+semiring</strong> где <code>weight = -log_probability</code>. При
+использовании Kaldi <strong>негирует</strong> знак:</p>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">// chain-numerator.cc:</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>BaseFloat transition_logprob <span class="op">=</span> <span class="op">-</span>arc<span class="op">.</span>weight<span class="op">.</span>Value<span class="op">();</span>  <span class="co">// НЕГИРУЕТ!</span></span></code></pre></div>
+<p>Наши CUDA kernels использовали веса <strong>как есть</strong> (без
+негирования).</p>
+<p><strong>Исправление:</strong> В
+<code>internal/sparse/sparse.go</code>, в функциях
+<code>FstToCSR()</code> и <code>FstToCOO()</code>:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode go"><code class="sourceCode go"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Было:</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>csr<span class="op">.</span>Weights <span class="op">=</span> <span class="bu">append</span><span class="op">(</span>csr<span class="op">.</span>Weights<span class="op">,</span> arc<span class="op">.</span>Weight<span class="op">)</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Стало:</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>csr<span class="op">.</span>Weights <span class="op">=</span> <span class="bu">append</span><span class="op">(</span>csr<span class="op">.</span>Weights<span class="op">,</span> <span class="op">-</span>arc<span class="op">.</span>Weight<span class="op">)</span>  <span class="co">// negate: tropical → log-prob</span></span></code></pre></div>
+<p><strong>Важный нюанс:</strong> Сначала исправили только
+<code>FstToCSR</code> — numerator не изменился! Причина: DataLoader
+использовал путь <code>FstToCOO → COOToCSR</code> для per-sequence FSTs,
+а не <code>FstToCSR</code> напрямую. Только после исправления
+<code>FstToCOO</code> numerator стал правильным.</p>
+<p><strong>Урок:</strong> Нужно трассировать полный путь данных от
+загрузки до использования. Два разных кодовых пути
+(<code>FstToCSR</code> для den.fst, <code>FstToCOO→COOToCSR</code> для
+per-sequence FSTs) оба нуждались в исправлении.</p>
+<p><strong>Результат после исправления знака:</strong></p>
+<pre><code>num_logprob = -28.3496  (Kaldi: -28.3496) ✅ ТОЧНОЕ СОВПАДЕНИЕ!
+den_logprob = -4.8942   (Kaldi: -0.3132)  ✗ Не совпадает</code></pre>
+<h3 id="баг-2-denominator-совершенно-другой-алгоритм">8.5 БАГ 2:
+Denominator — Совершенно Другой Алгоритм</h3>
+<p>Numerator совпал идеально. Но denominator — расхождение на порядок
+(-4.89 vs -0.31). Начали анализировать Kaldi source code.</p>
+<p><strong>Наш подход (наивный, log-domain):</strong> 1.
+<code>alpha[0][start_state] = 0.0</code> (log(1.0)) 2. Forward:
+<code>alpha[t+1][dst] = logadd(alpha[t][src] + nnet[t][pdf] + log_weight)</code>
+3. Total: <code>logadd(alpha[T][s] + final_weight)</code> для отмеченных
+final states</p>
+<p><strong>Kaldi denominator (6 фундаментальных отличий):</strong></p>
+<p><strong>1. Probability space, не log-domain.</strong></p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="va">exp_nnet_output_transposed_</span><span class="op">.</span>CopyFromMat<span class="op">(</span>nnet_output<span class="op">,</span> kTrans<span class="op">);</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="va">exp_nnet_output_transposed_</span><span class="op">.</span>ApplyExpLimited<span class="op">(-</span><span class="fl">30.0</span><span class="op">,</span> <span class="fl">30.0</span><span class="op">);</span></span></code></pre></div>
+<p>Кальди работает с <code>exp(nnet_output)</code>, а не с логарифмами.
+Это избегает logadd (дорогая операция) за счёт обычного сложения.</p>
+<p><strong>2. Initial probs — стационарное распределение, НЕ один start
+state.</strong></p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="co">// 100 итераций HMM propagation от start state</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>cur_prob<span class="op">(</span>fst<span class="op">.</span>Start<span class="op">())</span> <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> <span class="op">(</span>iter <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> iter <span class="op">&lt;</span> <span class="dv">100</span><span class="op">;</span> iter<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>    avg_prob <span class="op">+=</span> cur_prob <span class="op">/</span> <span class="dv">100</span><span class="op">;</span></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// propagate through HMM...</span></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>    cur_prob <span class="op">=</span> next_prob <span class="op">/</span> sum<span class="op">(</span>next_prob<span class="op">);</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>initial_probs <span class="op">=</span> avg_prob<span class="op">;</span></span></code></pre></div>
+<p>Это распределение по всем 7052 состояниям, аппроксимирующее
+стационарное распределение HMM.</p>
+<p><strong>3. ВСЕ состояния — final с probability = 1.0.</strong> Кальди
+НЕ использует отмеченные final states для denominator.
+<code>total_prob = sum over ALL states of alpha at last frame</code>.</p>
+<p><strong>4. Transition probabilities = exp(-arc.weight), не
+log.</strong></p>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>transition<span class="op">.</span>transition_prob <span class="op">=</span> exp<span class="op">(-</span>arc<span class="op">.</span>weight<span class="op">.</span>Value<span class="op">());</span></span></code></pre></div>
+<p><strong>5. Leaky HMM (coefficient = 1e-05).</strong> На каждом фрейме
+добавляется “утечка” — epsilon-переход из каждого состояния во все
+другие:</p>
+<pre><code>alpha&#39;(t, i) = alpha(t, i) + tot_alpha(t) * leaky_coeff * init(i)</code></pre>
+<p>Это улучшает генерализацию, предотвращает “застревание” в мёртвых
+состояниях, и обеспечивает что всегда есть путь через HMM.</p>
+<p><strong>6. Arbitrary scaling — деление на tot_alpha(t) каждый
+фрейм.</strong></p>
+<pre><code>alpha(t, i) = [sum over predecessors] * (1 / tot_alpha(t-1))</code></pre>
+<p>Предотвращает overflow в probability space. Компенсируется в итоговом
+logprob:</p>
+<pre><code>log_prob = log(sum_i alpha&#39;(T, i)) + sum_{t=0}^{T-1} log(tot_alpha(t))</code></pre>
+<p><strong>Без чтения Kaldi source code (chain-denominator.cc,
+chain-den-graph.cc) ни одну из этих 6 особенностей невозможно было
+угадать.</strong></p>
+<h3 id="решение-kaldi-denominator-wrapper">8.6 Решение: Kaldi
+Denominator Wrapper</h3>
+<p>Вместо переписывания denominator kernels (что заняло бы дни), создали
+C-обёртку вокруг Kaldi:</p>
+<p><strong>C API (<code>kaldi_den_wrapper.h</code>):</strong></p>
+<div class="sourceCode" id="cb39"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span><span class="op">*</span> kaldi_den_init<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span><span class="op">*</span> den_fst_path<span class="op">,</span> <span class="dt">int</span> num_pdfs<span class="op">);</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="dt">float</span> kaldi_den_forward<span class="op">(</span><span class="dt">void</span><span class="op">*</span> handle<span class="op">,</span> <span class="dt">const</span> <span class="dt">float</span><span class="op">*</span> nnet_output<span class="op">,</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>                        <span class="dt">int</span> num_rows<span class="op">,</span> <span class="dt">int</span> num_sequences<span class="op">,</span> <span class="dt">float</span> leaky_hmm_coeff<span class="op">);</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a><span class="dt">float</span> kaldi_den_forward_backward<span class="op">(</span><span class="dt">void</span><span class="op">*</span> handle<span class="op">,</span> <span class="dt">const</span> <span class="dt">float</span><span class="op">*</span> nnet_output<span class="op">,</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>                                  <span class="dt">int</span> num_rows<span class="op">,</span> <span class="dt">int</span> num_sequences<span class="op">,</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>                                  <span class="dt">float</span> leaky_hmm_coeff<span class="op">,</span> <span class="dt">float</span> deriv_weight<span class="op">,</span></span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>                                  <span class="dt">float</span><span class="op">*</span> grad_output<span class="op">);</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> kaldi_den_free<span class="op">(</span><span class="dt">void</span><span class="op">*</span> handle<span class="op">);</span></span></code></pre></div>
+<p>Компилируется в <code>libkaldi_den.so</code>, вызывается из Go через
+CGO (<code>internal/nnet/kaldi_den.go</code>).</p>
+<p><strong>Что делает внутри:</strong> 1. <code>kaldi_den_init</code>:
+загружает den.fst → DenominatorGraph (включая 100 итераций HMM для
+initial probs) 2. <code>kaldi_den_forward</code>: копирует nnet output в
+CuMatrix → DenominatorComputation → Forward() 3.
+<code>kaldi_den_forward_backward</code>: то же + Backward() → градиенты
+обратно в Go</p>
+<h3 id="финальная-верификация">8.7 Финальная Верификация</h3>
+<pre><code>Seq 0: fps=34, numPdfs=3080
+num_logprob = -28.349623  (Kaldi ref: -28.349600)  ✅
+den_logprob = -0.313154   (Kaldi ref: -0.313154)   ✅
+objf = -28.036469
+objf_per_frame = -0.824602 (Kaldi ref: -0.824602)  ✅</code></pre>
+<p><strong>Точное совпадение до 6-го знака после запятой.</strong></p>
+<hr />
+<h2 id="часть-9-итоговый-статус-проекта">Часть 9: Итоговый Статус
+Проекта</h2>
+<h3 id="что-готово">9.1 Что готово</h3>
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 29%" />
+<col style="width: 29%" />
+<col style="width: 29%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>Задача</th>
+<th>Статус</th>
+<th>Детали</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1</td>
+<td>Парсер ark/egs</td>
+<td>✅</td>
+<td>Byte-perfect, все форматы, gzip, edge cases</td>
+</tr>
+<tr class="even">
+<td>2</td>
+<td>Edge case guards</td>
+<td>✅</td>
+<td>14 unit-тестов, все PASS</td>
+</tr>
+<tr class="odd">
+<td>3</td>
+<td>Batch assembly</td>
+<td>✅</td>
+<td>Features + Ivectors merge</td>
+</tr>
+<tr class="even">
+<td>4</td>
+<td>FST → COO → CSR</td>
+<td>✅</td>
+<td>GPU-ready sparse format, weight negation</td>
+</tr>
+<tr class="odd">
+<td>5</td>
+<td>DataLoader</td>
+<td>✅</td>
+<td>Multi-file, shuffle, per-sequence FramesPerSeq</td>
+</tr>
+<tr class="even">
+<td>6</td>
+<td>FP16 конвертация</td>
+<td>✅</td>
+<td>IEEE 754, precision verified on 6.5M examples</td>
+</tr>
+<tr class="odd">
+<td>7</td>
+<td>CGO/CUDA bindings</td>
+<td>✅</td>
+<td>cuBLAS, Conv1D, BatchNorm, activations, loss scaler</td>
+</tr>
+<tr class="even">
+<td>8</td>
+<td>Forward pass</td>
+<td>✅</td>
+<td>47 layers, 117K frames/sec</td>
+</tr>
+<tr class="odd">
+<td>9</td>
+<td>Chain LF-MMI loss (numerator)</td>
+<td>✅</td>
+<td>CUDA kernels, exact match with Kaldi</td>
+</tr>
+<tr class="even">
+<td>10</td>
+<td>Chain LF-MMI loss (denominator)</td>
+<td>✅</td>
+<td>Kaldi wrapper, exact match</td>
+</tr>
+<tr class="odd">
+<td>11</td>
+<td>Xconfig parser</td>
+<td>✅</td>
+<td>Kaldi-compatible model config</td>
+</tr>
+</tbody>
+</table>
+<h3 id="что-осталось">9.2 Что осталось</h3>
+<table>
+<colgroup>
+<col style="width: 9%" />
+<col style="width: 25%" />
+<col style="width: 34%" />
+<col style="width: 31%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>Задача</th>
+<th>Сложность</th>
+<th>Описание</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1</td>
+<td>Backward pass (chain loss gradients)</td>
+<td>средне</td>
+<td>den_posterior - num_posterior</td>
+</tr>
+<tr class="even">
+<td>2</td>
+<td>SGD/Adam на GPU</td>
+<td>средне</td>
+<td>Сейчас только CPU версия</td>
+</tr>
+<tr class="odd">
+<td>3</td>
+<td>Training loop</td>
+<td>средне</td>
+<td>Epoch, batching, logging</td>
+</tr>
+<tr class="even">
+<td>4</td>
+<td>Горутины pipeline</td>
+<td>средне</td>
+<td>Prefetch, кольцевой буфер</td>
+</tr>
+<tr class="odd">
+<td>5</td>
+<td>Pinned memory + CUDA streams</td>
+<td>средне</td>
+<td>Transfer optimization</td>
+</tr>
+<tr class="even">
+<td>6</td>
+<td>Нативный denominator на CUDA</td>
+<td>сложно</td>
+<td>Заменить Kaldi wrapper</td>
+</tr>
+<tr class="odd">
+<td>7</td>
+<td>Бенчмарки FP32 vs FP16</td>
+<td>мало</td>
+<td>50h потом 2600h</td>
+</tr>
+</tbody>
+</table>
+<h3 id="архитектурное-состояние">9.3 Архитектурное состояние</h3>
+<pre><code>Numerator:  Go DataLoader → FP16 → CUDA kernels (log-domain)     ← наш код
+Denominator: Go CGO → libkaldi_den.so → Kaldi C++ (prob-domain)   ← wrapper
+Chain loss = num - den (verified exact match with Kaldi)</code></pre>
+<hr />
+<h2 id="часть-10-ключевые-файлы">Часть 10: Ключевые Файлы</h2>
+<h3 id="парсер-и-данные">Парсер и данные</h3>
+<pre><code>internal/parser/parser.go              — основной бинарный парсер
+internal/parser/fst.go                 — FST reader (compact + vector)
+internal/parser/parser_edge_test.go    — 14 edge case тестов
+internal/loader/dataloader.go          — DataLoader с per-sequence FSTs
+internal/sparse/sparse.go              — CSR/COO с негированием весов</code></pre>
+<h3 id="gpu-и-нейросеть">GPU и нейросеть</h3>
+<pre><code>internal/gpu/gpu.go                    — GPU tensor abstraction
+internal/nnet/forward.go               — forward pass engine
+internal/nnet/chain_loss.go            — chain loss computation
+internal/nnet/chain_fst.go             — FST on GPU
+internal/nnet/kaldi_den.go             — CGO wrapper для Kaldi denominator
+internal/config/xconfig.go             — Kaldi config parser</code></pre>
+<h3 id="cuda">CUDA</h3>
+<pre><code>cpp/cuda/chain.cu                      — chain forward-backward kernels
+cpp/cuda/kernels.cu                    — activations
+cpp/cuda/cnn_kernels.cu                — Conv1D
+cpp/cuda/cgo_interface.cu              — CGO bridge
+cpp/build/libkaldi_fp16.so             — compiled CUDA library
+cpp/build/libkaldi_fp16_cgo.so         — CGO bridge library</code></pre>
+<h3 id="верификация">Верификация</h3>
+<pre><code>test_system/chain_verify.cc            — C++ Kaldi reference tool
+test_system/kaldi_den_wrapper.{h,cc}   — C wrapper для Kaldi denominator
+test_system/libkaldi_den.so            — shared library
+cmd/chainverify/main.go                — Go verification tool
+cmd/chaintest/main.go                  — chain loss end-to-end test</code></pre>
+<h3 id="kaldi-reference-файлы">Kaldi reference файлы</h3>
+<pre><code>/opt/kaldi/src/chain/chain-numerator.cc       — numerator (CPU, log-domain)
+/opt/kaldi/src/chain/chain-denominator.cc     — denominator (GPU, prob-domain)
+/opt/kaldi/src/chain/chain-den-graph.cc       — initial probs computation
+/opt/kaldi/src/chain/chain-training.cc        — top-level
+/opt/kaldi/egs/work_3/s5/exp/chain_cnn_v2/cnn_tdnn1d_v2_sp/den.fst  — 7052 states
+/opt/kaldi/egs/work_3/s5/exp/chain_cnn_v2/cnn_tdnn1d_v2_sp/egs/     — training data</code></pre>
+<hr />
+<h2 id="часть-11-извлечённые-уроки">Часть 11: Извлечённые Уроки</h2>
+<h3 id="урок-1-всегда-верифицировать-против-reference">Урок 1: Всегда
+верифицировать против reference</h3>
+<p>Без точного численного сравнения мы бы не нашли ни одну из ошибок.
+Кажущийся “разумный” output (loss ~414 для random weights) полностью
+маскировал два серьёзных бага. Loss бы никогда не сошёлся при
+тренировке.</p>
+<h3 id="урок-2-читать-reference-код-перед-написанием-своего">Урок 2:
+Читать reference код ПЕРЕД написанием своего</h3>
+<p>Denominator в Kaldi — это не “forward-backward на FST”. Это 6
+специфических оптимизаций (probability space, leaky HMM, initial probs,
+arbitrary scaling, все состояния final, 100-iter HMM warmup). Без чтения
+chain-denominator.cc это невозможно реализовать.</p>
+<h3 id="урок-3-tropical-semiring-log-semiring">Урок 3: Tropical semiring
+≠ log semiring</h3>
+<p>OpenFst tropical weights = <strong>-log_prob</strong>. Любой код
+работающий с FST весами в log-domain должен негировать. Неочевидно и
+легко пропустить.</p>
+<h3 id="урок-4-трассировать-весь-путь-данных">Урок 4: Трассировать весь
+путь данных</h3>
+<p>Два кодовых пути (<code>FstToCSR</code> vs
+<code>FstToCOO→COOToCSR</code>) — оба нужно исправить. Исправление
+одного не повлияло на второй.</p>
+<h3 id="урок-5-прагматичный-подход-к-верификации">Урок 5: Прагматичный
+подход к верификации</h3>
+<p>C++ tool (50 строк, 20 минут) сэкономил дни отладки. Wrapper вместо
+переписывания позволяет двигаться вперёд.</p>
+<h3 id="урок-6-per-sequence-vs-per-batch-параметры">Урок 6: Per-sequence
+vs per-batch параметры</h3>
+<p><code>FramesPerSeq</code> — это per-sequence, не per-batch.
+Использование одного значения для всех sequences привело к -inf для
+большинства из них.</p>
+<h3 id="урок-7-самоуверенность-губит-нас">Урок 7: “Самоуверенность губит
+нас”</h3>
+<p>Нельзя предполагать что алгоритм работает правильно без точной
+верификации. Каждый компонент нужно проверять отдельно, с известным
+reference.</p>

@@ -14,7 +14,7 @@ const (
 
 var kPosInfinity = float32(math.Inf(1))
 
-// ReadFst reads OpenFst CompactAcceptor format
+// ReadFst reads OpenFst binary format (compact_acceptor or vector)
 func ReadFst(reader *bufio.Reader) *Fst {
 	// Read header
 	magic := readInt32Raw(reader)
@@ -25,38 +25,61 @@ func ReadFst(reader *bufio.Reader) *Fst {
 	fstType := readString(reader)
 	arcType := readString(reader)
 
-	if fstType != "compact_acceptor" || arcType != "standard" {
-		// Unsupported FST type
+	if arcType != "standard" {
 		return nil
 	}
 
-	version := readInt32Raw(reader)
-	flags := readInt32Raw(reader)
-	properties := readUint64Raw(reader)
-	start := readInt64Raw(reader)
-	numStates := readInt64Raw(reader)
-	numArcs := readInt64Raw(reader)
+	switch fstType {
+	case "compact_acceptor":
+		return readCompactAcceptor(reader)
+	case "vector":
+		return readVectorFst(reader)
+	default:
+		return nil
+	}
+}
 
-	_ = version // unused but needed for format
-	_ = flags
+// readFstHeader reads the common header fields after fstType/arcType
+type fstHeader struct {
+	version    int32
+	flags      int32
+	properties uint64
+	start      int64
+	numStates  int64
+	numArcs    int64
+}
+
+func readFstHeaderFields(reader *bufio.Reader) fstHeader {
+	return fstHeader{
+		version:    readInt32Raw(reader),
+		flags:      readInt32Raw(reader),
+		properties: readUint64Raw(reader),
+		start:      readInt64Raw(reader),
+		numStates:  readInt64Raw(reader),
+		numArcs:    readInt64Raw(reader),
+	}
+}
+
+// readCompactAcceptor reads OpenFst CompactAcceptor format
+func readCompactAcceptor(reader *bufio.Reader) *Fst {
+	h := readFstHeaderFields(reader)
 
 	fst := &Fst{
-		Start:      start,
-		NumStates:  numStates,
-		NumArcs:    numArcs,
-		Properties: properties,
-		States:     make([]FstState, numStates),
+		Start:      h.start,
+		NumStates:  h.numStates,
+		NumArcs:    h.numArcs,
+		Properties: h.properties,
+		States:     make([]FstState, h.numStates),
 	}
 
-	// AcceptorCompactor.Size() == -1, so we have states array
 	// Read states offsets: (numStates + 1) × uint32
-	statesOffsets := make([]uint32, numStates+1)
-	for i := int64(0); i <= numStates; i++ {
+	statesOffsets := make([]uint32, h.numStates+1)
+	for i := int64(0); i <= h.numStates; i++ {
 		statesOffsets[i] = readUint32Raw(reader)
 	}
 
 	// ncompacts = states[numStates]
-	ncompacts := statesOffsets[numStates]
+	ncompacts := statesOffsets[h.numStates]
 
 	// Read compacts: Element = (label:int32, weight:float32, nextstate:int32)
 	type compactElement struct {
@@ -72,7 +95,7 @@ func ReadFst(reader *bufio.Reader) *Fst {
 	}
 
 	// Build states from compacts
-	for s := int64(0); s < numStates; s++ {
+	for s := int64(0); s < h.numStates; s++ {
 		startIdx := statesOffsets[s]
 		endIdx := statesOffsets[s+1]
 
@@ -82,7 +105,6 @@ func ReadFst(reader *bufio.Reader) *Fst {
 		for i := startIdx; i < endIdx; i++ {
 			elem := compacts[i]
 
-			// In AcceptorCompactor, if nextstate == kNoStateId, it's a final weight
 			if elem.nextState == kNoStateId {
 				state.Final = elem.weight
 			} else {
@@ -98,12 +120,61 @@ func ReadFst(reader *bufio.Reader) *Fst {
 	return fst
 }
 
+// readVectorFst reads OpenFst VectorFst<StdArc> format
+// Format per state: final_weight(float32), narcs(int64),
+//
+//	per arc: ilabel(int32), olabel(int32), weight(float32), nextstate(int32)
+func readVectorFst(reader *bufio.Reader) *Fst {
+	h := readFstHeaderFields(reader)
+
+	fst := &Fst{
+		Start:      h.start,
+		NumStates:  h.numStates,
+		NumArcs:    h.numArcs,
+		Properties: h.properties,
+		States:     make([]FstState, h.numStates),
+	}
+
+	for s := int64(0); s < h.numStates; s++ {
+		state := &fst.States[s]
+
+		// Final weight (Inf = not final)
+		state.Final = readFloat32Raw(reader)
+
+		// Number of arcs from this state
+		narcs := readInt64Raw(reader)
+
+		if narcs > 0 {
+			state.Arcs = make([]FstArc, narcs)
+			for a := int64(0); a < narcs; a++ {
+				ilabel := readInt32Raw(reader)
+				_ = readInt32Raw(reader) // olabel (== ilabel for acceptor)
+				weight := readFloat32Raw(reader)
+				nextState := readInt32Raw(reader)
+
+				state.Arcs[a] = FstArc{
+					Label:     ilabel,
+					Weight:    weight,
+					NextState: nextState,
+				}
+			}
+		}
+	}
+
+	// Count actual arcs (header numArcs is 0 for vector FSTs)
+	totalArcs := int64(0)
+	for s := range fst.States {
+		totalArcs += int64(len(fst.States[s].Arcs))
+	}
+	fst.NumArcs = totalArcs
+
+	return fst
+}
+
 // ReadSupervision reads chain supervision block
 func ReadSupervision(reader *bufio.Reader) *SupervisionBlock {
 	sup := &SupervisionBlock{}
 
-	// Already past <Supervision> tag
-	// Read fields by tags
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
@@ -142,7 +213,6 @@ func ReadSupervision(reader *bufio.Reader) *SupervisionBlock {
 				e2e, _ := reader.ReadByte()
 				sup.End2End = (e2e == 'T')
 				if !sup.End2End {
-					// Read FST
 					sup.Fst = ReadFst(reader)
 				}
 
@@ -150,7 +220,6 @@ func ReadSupervision(reader *bufio.Reader) *SupervisionBlock {
 				return sup
 
 			case "DW", "DW2":
-				// DerivWeights
 				sup.DerivWeights = readDerivWeights(reader, tag)
 
 			case "/NnetChainSup":
@@ -161,12 +230,9 @@ func ReadSupervision(reader *bufio.Reader) *SupervisionBlock {
 }
 
 func readDerivWeights(reader *bufio.Reader, tag string) []float32 {
-	// Skip space after tag
-	reader.ReadByte()
+	reader.ReadByte() // space after tag
 
 	if tag == "DW" {
-		// ReadVectorAsChar format
-		// FV token + size + data as chars
 		fv1, _ := reader.ReadByte()
 		fv2, _ := reader.ReadByte()
 		if fv1 != 'F' || fv2 != 'V' {
@@ -183,7 +249,6 @@ func readDerivWeights(reader *bufio.Reader, tag string) []float32 {
 		return weights
 
 	} else { // DW2
-		// Regular Vector<float> format
 		fv1, _ := reader.ReadByte()
 		fv2, _ := reader.ReadByte()
 		if fv1 != 'F' || fv2 != 'V' {
@@ -201,7 +266,7 @@ func readDerivWeights(reader *bufio.Reader, tag string) []float32 {
 	}
 }
 
-// Helper functions for raw reading (no Kaldi WriteBasicType format)
+// Helper functions for raw reading
 
 func readInt32Raw(reader *bufio.Reader) int32 {
 	var buf [4]byte

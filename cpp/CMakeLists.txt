@@ -69,6 +69,8 @@ add_library(kaldi_fp16
     cuda/cnn_kernels.cu
     cuda/bridge.cu
     cuda/ops.cu
+    cuda/chain.cu
+    cuda/chain_den.cu
 )
 
 target_include_directories(kaldi_fp16 PUBLIC
