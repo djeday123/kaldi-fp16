@@ -143,3 +143,28 @@ func (it *EgsIterator) CurrentFile() string {
 func (it *EgsIterator) Progress() (int, int) {
 	return it.current, len(it.arkPaths)
 }
+
+// LoadBatches — convenience wrapper for nscheck compatibility
+func LoadBatches(arkPath string, batchSize int) ([]*TrainingBatch, error) {
+	dl, err := NewDataLoader(DataLoaderConfig{
+		Pattern:   arkPath,
+		BatchSize: batchSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer dl.Close()
+
+	var batches []*TrainingBatch
+	for {
+		b, err := dl.NextBatch()
+		if err != nil {
+			return nil, err
+		}
+		if b == nil {
+			break
+		}
+		batches = append(batches, b)
+	}
+	return batches, nil
+}

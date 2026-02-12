@@ -83,12 +83,12 @@ clean: CMakeFiles/kaldi_fp16_cgo.dir/clean
 CMakeFiles/kaldi_fp16.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9 "Built target kaldi_fp16"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11 "Built target kaldi_fp16"
 .PHONY : CMakeFiles/kaldi_fp16.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/kaldi_fp16.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /projects/pr2/kaldi-fp16/cpp/build/CMakeFiles 9
+	$(CMAKE_COMMAND) -E cmake_progress_start /projects/pr2/kaldi-fp16/cpp/build/CMakeFiles 11
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/kaldi_fp16.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /projects/pr2/kaldi-fp16/cpp/build/CMakeFiles 0
 .PHONY : CMakeFiles/kaldi_fp16.dir/rule
@@ -109,12 +109,12 @@ CMakeFiles/kaldi_fp16.dir/clean:
 CMakeFiles/kaldi_fp16_cgo.dir/all: CMakeFiles/kaldi_fp16.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16_cgo.dir/build.make CMakeFiles/kaldi_fp16_cgo.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16_cgo.dir/build.make CMakeFiles/kaldi_fp16_cgo.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=10,11,12 "Built target kaldi_fp16_cgo"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/projects/pr2/kaldi-fp16/cpp/build/CMakeFiles --progress-num=12,13,14 "Built target kaldi_fp16_cgo"
 .PHONY : CMakeFiles/kaldi_fp16_cgo.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/kaldi_fp16_cgo.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /projects/pr2/kaldi-fp16/cpp/build/CMakeFiles 12
+	$(CMAKE_COMMAND) -E cmake_progress_start /projects/pr2/kaldi-fp16/cpp/build/CMakeFiles 14
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/kaldi_fp16_cgo.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /projects/pr2/kaldi-fp16/cpp/build/CMakeFiles 0
 .PHONY : CMakeFiles/kaldi_fp16_cgo.dir/rule

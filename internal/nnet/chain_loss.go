@@ -149,6 +149,22 @@ func (f *ChainFstGPU) Free() {
 	*f = ChainFstGPU{}
 }
 
+// GetCSROnGPU extracts raw GPU pointers from ChainFstGPU into CSROnGPU
+// for use with chain_num_forward_backward / chain_num_forward_backward_det
+func GetCSROnGPU(f *ChainFstGPU) *CSROnGPU {
+	return &CSROnGPU{
+		RowPtr:       unsafe.Pointer(f.cFst.row_ptr),
+		ColIdx:       unsafe.Pointer(f.cFst.col_idx),
+		Weights:      unsafe.Pointer(f.cFst.weights),
+		PdfIds:       unsafe.Pointer(f.cFst.labels),
+		FinalStates:  unsafe.Pointer(f.cFst.final_states),
+		FinalWeights: unsafe.Pointer(f.cFst.final_weights),
+		NumStates:    int(f.cFst.num_states),
+		NumArcs:      int(f.cFst.num_arcs),
+		NumFinal:     int(f.cFst.num_final),
+	}
+}
+
 // ============================================================
 // ComputeChainLoss — single sequence
 // ============================================================

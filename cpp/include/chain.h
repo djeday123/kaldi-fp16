@@ -108,6 +108,42 @@ extern "C"
         ChainLossResult *result);
 
     // ============================================================
+    // ============================================================
+    // Deterministic forward-backward (no atomics)
+    // For scientific comparison with Kaldi CPU implementation.
+    // ============================================================
+
+    int chain_forward_backward_det(
+        const void *nnet_output,
+        const ChainFstGPU *fst,
+        int T, int num_pdfs,
+        float *alpha, float *beta,
+        float *total_logprob);
+
+    int chain_compute_posteriors_det(
+        const void *nnet_output,
+        const ChainFstGPU *fst,
+        int T, int num_pdfs,
+        const float *alpha, const float *beta,
+        float total_logprob,
+        float *posteriors);
+
+    float chain_num_forward_backward_det(
+        const int *fst_row_ptr,
+        const int *fst_col_idx,
+        const float *fst_weights,
+        const int *fst_pdf_ids,
+        const int *fst_final_states,
+        const float *fst_final_weights,
+        int num_states,
+        int num_arcs,
+        int num_final,
+        const float *nnet_output,
+        float *num_post,
+        int T,
+        int num_pdfs,
+        void *stream);
+
     // Workspace allocation helper
     // ============================================================
 

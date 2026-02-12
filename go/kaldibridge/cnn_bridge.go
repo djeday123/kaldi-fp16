@@ -4,7 +4,7 @@
 package kaldibridge
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../cpp/include
+#cgo CFLAGS: -I${SRCDIR}/../../cpp/include -I/usr/local/cuda-12.8/include -I/usr/local/cuda-12.8/include
 #cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16_cgo -lkaldi_fp16 -lcublas -lcudart -lstdc++
 
 #include <cuda_runtime.h>

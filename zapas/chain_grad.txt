@@ -1,0 +1,182 @@
+// chain_grad.cu — Chain loss gradient computation kernel
+//
+// Implements: grad = sup_weight * (num_post - den_post) - sup_weight * l2_reg * nnet_output
+// Optionally: grad[t] *= deriv_weight[t]
+//
+// Following Kaldi's ComputeChainObjfAndDeriv (chain-training.cc)
+
+#include <cuda_runtime.h>
+
+// ============================================================================
+// Kernel 1: Compute chain gradient
+//   grad[i] = sup_weight * (num_post[i] - den_post[i]) - l2_scale * nnet_output[i]
+//
+//   where l2_scale = sup_weight * l2_regularize
+//
+//   Fused into single kernel for efficiency (one global memory pass)
+// ============================================================================
+__global__ void chain_compute_grad_kernel(
+    float *__restrict__ grad,              // output: [T * num_pdfs]
+    const float *__restrict__ num_post,    // numerator posteriors [T * num_pdfs]
+    const float *__restrict__ den_post,    // denominator posteriors [T * num_pdfs]
+    const float *__restrict__ nnet_output, // network output [T * num_pdfs] (for L2)
+    float sup_weight,                      // supervision.weight (typically 1.0)
+    float l2_scale,                        // sup_weight * l2_regularize
+    int total_elements)                    // T * num_pdfs
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < total_elements)
+    {
+        float g = sup_weight * (num_post[idx] - den_post[idx]);
+        // L2 regularization: grad -= l2_scale * nnet_output
+        // l2_scale = sup_weight * l2_regularize (precomputed by caller)
+        if (l2_scale != 0.0f)
+        {
+            g -= l2_scale * nnet_output[idx];
+        }
+        grad[idx] = g;
+    }
+}
+
+// ============================================================================
+// Kernel 2: Apply per-frame derivative weights
+//   grad[t * num_pdfs + p] *= deriv_weight[t]
+//
+//   Called after chain_compute_grad_kernel if deriv_weights provided
+// ============================================================================
+__global__ void chain_apply_deriv_weights_kernel(
+    float *__restrict__ grad,                // [T * num_pdfs] — modified in-place
+    const float *__restrict__ deriv_weights, // [T] — per-frame weights
+    int num_pdfs,
+    int total_elements) // T * num_pdfs
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < total_elements)
+    {
+        int t = idx / num_pdfs;
+        grad[idx] *= deriv_weights[t];
+    }
+}
+
+// ============================================================================
+// Kernel 3: Compute L2 objective term
+//   l2_term = -0.5 * scale * sum(nnet_output[i]^2)
+//
+//   This is a reduction kernel. We compute partial sums per block,
+//   then the host sums across blocks.
+// ============================================================================
+__global__ void chain_l2_term_kernel(
+    const float *__restrict__ nnet_output, // [T * num_pdfs]
+    float *__restrict__ partial_sums,      // [num_blocks] — output
+    int total_elements)
+{
+    extern __shared__ float sdata[];
+
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Load and square
+    float val = 0.0f;
+    if (idx < total_elements)
+    {
+        val = nnet_output[idx];
+        val = val * val;
+    }
+    sdata[tid] = val;
+    __syncthreads();
+
+    // Parallel reduction in shared memory
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+        {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0)
+    {
+        partial_sums[blockIdx.x] = sdata[0];
+    }
+}
+
+// ============================================================================
+// C interface functions (called from Go via CGO)
+// ============================================================================
+extern "C"
+{
+
+    // Compute chain gradient: grad = sup_weight * (num_post - den_post) - l2_scale * nnet_output
+    void chain_compute_grad(
+        float *grad,
+        const float *num_post,
+        const float *den_post,
+        const float *nnet_output,
+        float sup_weight,
+        float l2_regularize,
+        int T,
+        int num_pdfs,
+        cudaStream_t stream)
+    {
+        int total = T * num_pdfs;
+        int threads = 256;
+        int blocks = (total + threads - 1) / threads;
+        float l2_scale = sup_weight * l2_regularize;
+
+        chain_compute_grad_kernel<<<blocks, threads, 0, stream>>>(
+            grad, num_post, den_post, nnet_output,
+            sup_weight, l2_scale, total);
+    }
+
+    // Apply per-frame derivative weights to gradient
+    void chain_apply_deriv_weights(
+        float *grad,
+        const float *deriv_weights,
+        int T,
+        int num_pdfs,
+        cudaStream_t stream)
+    {
+        int total = T * num_pdfs;
+        int threads = 256;
+        int blocks = (total + threads - 1) / threads;
+
+        chain_apply_deriv_weights_kernel<<<blocks, threads, 0, stream>>>(
+            grad, deriv_weights, num_pdfs, total);
+    }
+
+    // Compute L2 term: returns sum of squares (caller multiplies by -0.5 * scale)
+    float chain_compute_l2_term(
+        const float *nnet_output,
+        int T,
+        int num_pdfs,
+        cudaStream_t stream)
+    {
+        int total = T * num_pdfs;
+        int threads = 256;
+        int blocks = (total + threads - 1) / threads;
+
+        // Allocate temporary for partial sums
+        float *d_partial;
+        cudaMalloc(&d_partial, blocks * sizeof(float));
+
+        chain_l2_term_kernel<<<blocks, threads, threads * sizeof(float), stream>>>(
+            nnet_output, d_partial, total);
+
+        // Copy partial sums to host and reduce
+        float *h_partial = (float *)malloc(blocks * sizeof(float));
+        cudaMemcpy(h_partial, d_partial, blocks * sizeof(float), cudaMemcpyDeviceToHost);
+
+        float sum_sq = 0.0f;
+        for (int i = 0; i < blocks; i++)
+        {
+            sum_sq += h_partial[i];
+        }
+
+        free(h_partial);
+        cudaFree(d_partial);
+
+        return sum_sq;
+    }
+
+} // extern "C"

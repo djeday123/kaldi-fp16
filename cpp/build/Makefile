@@ -235,6 +235,30 @@ cuda/chain.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.s
 .PHONY : cuda/chain.cu.s
 
+cuda/chain_backward_kernels.o: cuda/chain_backward_kernels.cu.o
+.PHONY : cuda/chain_backward_kernels.o
+
+# target to build an object file
+cuda/chain_backward_kernels.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward_kernels.cu.o
+.PHONY : cuda/chain_backward_kernels.cu.o
+
+cuda/chain_backward_kernels.i: cuda/chain_backward_kernels.cu.i
+.PHONY : cuda/chain_backward_kernels.i
+
+# target to preprocess a source file
+cuda/chain_backward_kernels.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward_kernels.cu.i
+.PHONY : cuda/chain_backward_kernels.cu.i
+
+cuda/chain_backward_kernels.s: cuda/chain_backward_kernels.cu.s
+.PHONY : cuda/chain_backward_kernels.s
+
+# target to generate assembly for a file
+cuda/chain_backward_kernels.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward_kernels.cu.s
+.PHONY : cuda/chain_backward_kernels.cu.s
+
 cuda/chain_den.o: cuda/chain_den.cu.o
 .PHONY : cuda/chain_den.o
 
@@ -258,6 +282,30 @@ cuda/chain_den.s: cuda/chain_den.cu.s
 cuda/chain_den.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_den.cu.s
 .PHONY : cuda/chain_den.cu.s
+
+cuda/chain_det.o: cuda/chain_det.cu.o
+.PHONY : cuda/chain_det.o
+
+# target to build an object file
+cuda/chain_det.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_det.cu.o
+.PHONY : cuda/chain_det.cu.o
+
+cuda/chain_det.i: cuda/chain_det.cu.i
+.PHONY : cuda/chain_det.i
+
+# target to preprocess a source file
+cuda/chain_det.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_det.cu.i
+.PHONY : cuda/chain_det.cu.i
+
+cuda/chain_det.s: cuda/chain_det.cu.s
+.PHONY : cuda/chain_det.s
+
+# target to generate assembly for a file
+cuda/chain_det.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_det.cu.s
+.PHONY : cuda/chain_det.cu.s
 
 cuda/cnn_kernels.o: cuda/cnn_kernels.cu.o
 .PHONY : cuda/cnn_kernels.o
@@ -399,9 +447,15 @@ help:
 	@echo "... cuda/chain.o"
 	@echo "... cuda/chain.i"
 	@echo "... cuda/chain.s"
+	@echo "... cuda/chain_backward_kernels.o"
+	@echo "... cuda/chain_backward_kernels.i"
+	@echo "... cuda/chain_backward_kernels.s"
 	@echo "... cuda/chain_den.o"
 	@echo "... cuda/chain_den.i"
 	@echo "... cuda/chain_den.s"
+	@echo "... cuda/chain_det.o"
+	@echo "... cuda/chain_det.i"
+	@echo "... cuda/chain_det.s"
 	@echo "... cuda/cnn_kernels.o"
 	@echo "... cuda/cnn_kernels.i"
 	@echo "... cuda/cnn_kernels.s"

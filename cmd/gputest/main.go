@@ -13,7 +13,8 @@ import (
 
 func main() {
 	// Configuration
-	arkPattern := "/opt/kaldi/egs/work_3/s5/exp/cnn_tdnn_50h_bn192_l2_001/egs/cegs.*.ark"
+	//arkPattern := "/opt/kaldi/egs/work_3/s5/exp/cnn_tdnn_50h_bn192_l2_001/egs/cegs.*.ark"
+	arkPattern := "/opt/kaldi/egs/work_3/s5/exp/chain_cnn_v2/cnn_tdnn1d_v2_sp/egs/cegs.*.ark"
 	batchSize := 64
 	deviceID := 0
 	maxBatches := 20
