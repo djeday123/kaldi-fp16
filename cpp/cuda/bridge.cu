@@ -276,6 +276,11 @@ extern "C"
         }
     }
 
+    extern "C" void bridge_gpu_memset(void *ptr, int value, size_t bytes)
+    {
+        cudaMemset(ptr, value, bytes);
+    }
+
     // ============================================================================
     // FP16 ↔ FP32 conversion kernels on GPU
     // ============================================================================

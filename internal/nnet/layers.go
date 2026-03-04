@@ -28,19 +28,16 @@ type Layer struct {
 // Layer specs — type-specific resolved parameters
 // ============================================================
 
-// InputSpec defines an input layer
 type InputLayerSpec struct {
 	Dim int
 }
 
-// IDCTSpec — IDCT transform (fixed matrix, not trainable)
 type IDCTSpec struct {
 	Dim            int
 	CepstralLifter float64
-	AffineFile     string // path to idct.mat
+	AffineFile     string
 }
 
-// LinearSpec — linear projection W*x (no bias)
 type LinearSpec struct {
 	InputDim              int
 	OutputDim             int
@@ -48,13 +45,11 @@ type LinearSpec struct {
 	OrthonormalConstraint float64
 }
 
-// BatchnormSpec — batch normalization
 type BatchnormSpec struct {
 	Dim       int
-	TargetRMS float64 // 0 = default (1.0)
+	TargetRMS float64
 }
 
-// SpecAugmentSpec — SpecAugment (training only)
 type SpecAugmentSpec struct {
 	Dim                  int
 	FreqMaxProportion    float64
@@ -62,48 +57,38 @@ type SpecAugmentSpec struct {
 	TimeMaskMaxFrames    int
 }
 
-// CombineFeatureMapsSpec — interleave feature maps
 type CombineFeatureMapsSpec struct {
-	NumFilters1 int // filters in first input
-	NumFilters2 int // filters in second input
+	NumFilters1 int
+	NumFilters2 int
 	Height      int
 	InputDim    int
 	OutputDim   int
 }
 
-// ConvReluBNSpec — conv-relu-batchnorm layer
 type ConvReluBNSpec struct {
 	HeightIn           int
 	HeightOut          int
-	HeightSubsample    int // 1 = no subsampling
+	HeightSubsample    int
 	TimeOffsets        []int
 	HeightOffsets      []int
 	NumFiltersIn       int
 	NumFiltersOut      int
-	InputDim           int // height_in * num_filters_in * len(time_offsets)
-	OutputDim          int // height_out * num_filters_out
+	InputDim           int
+	OutputDim          int
 	L2Reg              float64
 	LearningRateFactor float64
 	MaxChange          float64
 }
 
-// TDNNFSpec — factorized TDNN layer
 type TDNNFSpec struct {
 	InputDim      int
-	OutputDim     int // = Dim
+	OutputDim     int
 	BottleneckDim int
 	TimeStride    int
-	BypassScale   float64 // 0.66 default, 0.0 = no bypass
+	BypassScale   float64
 	L2Reg         float64
-	// Sub-components:
-	// linear: InputDim → BottleneckDim (no bias)
-	// affine: BottleneckDim * num_splices → OutputDim (with bias)
-	// relu
-	// batchnorm
-	// bypass: Scale(bypass_scale, input) + output
 }
 
-// AttentionSpec — restricted self-attention + relu + batchnorm
 type AttentionSpec struct {
 	InputDim       int
 	OutputDim      int
@@ -112,20 +97,20 @@ type AttentionSpec struct {
 	KeyDim         int
 	NumLeftInputs  int
 	NumRightInputs int
+	ContextDim     int
 	TimeStride     int
+	KeyScale       float64
 	L2Reg          float64
 }
 
-// PrefinalSpec — prefinal layer: linear(small) → affine(big) → relu → bn
 type PrefinalSpec struct {
 	InputDim  int
 	SmallDim  int
 	BigDim    int
-	OutputDim int // = BigDim
+	OutputDim int
 	L2Reg     float64
 }
 
-// OutputSpec — output layer: affine → optional log-softmax
 type OutputSpec struct {
 	InputDim           int
 	OutputDim          int
@@ -138,9 +123,7 @@ type OutputSpec struct {
 // Resolve layers — compute dimensions from xconfig
 // ============================================================
 
-// ResolveLayers takes parsed xconfig and resolves all dimensions
 func ResolveLayers(configs []*LayerConfig) ([]*Layer, error) {
-	// Map of layer name → resolved layer
 	layerMap := make(map[string]*Layer)
 	var layers []*Layer
 
@@ -177,7 +160,6 @@ func resolveLayer(cfg *LayerConfig, layerMap map[string]*Layer, prev []*Layer, i
 			layer.InputDim = src.OutputDim
 			layer.InputNames = []string{layer.Input.Name}
 		} else {
-			// Try matching with suffix (e.g. "cnn6" matches "cnn6.batchnorm")
 			resolved := resolveLayerName(layer.Input.Name, layerMap)
 			if resolved != nil {
 				layer.InputDim = resolved.OutputDim
@@ -256,8 +238,6 @@ func resolveLayer(cfg *LayerConfig, layerMap map[string]*Layer, prev []*Layer, i
 		}
 
 	case LayerCombineFeatureMaps:
-		// Interleaves feature maps: rearranges [feat1 | feat2] into interleaved order
-		// Output dim = input dim (just reordering)
 		height := cfg.GetInt("height", 0)
 		nf1 := cfg.GetInt("num-filters1", 1)
 		nf2 := cfg.GetInt("num-filters2", 1)
@@ -274,18 +254,10 @@ func resolveLayer(cfg *LayerConfig, layerMap map[string]*Layer, prev []*Layer, i
 		heightIn := cfg.GetInt("height-in", 0)
 		heightOut := cfg.GetInt("height-out", heightIn)
 		heightSubsample := cfg.GetInt("height-subsample-out", 1)
-		if heightIn > 0 && heightOut > 0 && heightSubsample > 1 {
-			// Verify: heightOut = heightIn / heightSubsample
-			expected := heightIn / heightSubsample
-			if heightOut != expected {
-				// Trust the config
-			}
-		}
 		numFiltersOut := cfg.GetInt("num-filters-out", 0)
 		timeOffsets := cfg.GetIntSlice("time-offsets")
 		heightOffsets := cfg.GetIntSlice("height-offsets")
 
-		// Input num_filters = InputDim / heightIn
 		numFiltersIn := 0
 		if heightIn > 0 {
 			numFiltersIn = layer.InputDim / heightIn
@@ -327,17 +299,20 @@ func resolveLayer(cfg *LayerConfig, layerMap map[string]*Layer, prev []*Layer, i
 		numHeads := cfg.GetInt("num-heads", 1)
 		valueDim := cfg.GetInt("value-dim", 0)
 		keyDim := cfg.GetInt("key-dim", 0)
-		// Output dim = num_heads * (value_dim + key_dim) ... actually in Kaldi
-		// it's the input dim (the attention output has same dim as input)
-		layer.OutputDim = layer.InputDim
+		numLeftInputs := cfg.GetInt("num-left-inputs", 0)
+		numRightInputs := cfg.GetInt("num-right-inputs", 0)
+		contextDim := 1 + numLeftInputs + numRightInputs
+		// Kaldi: output = num_heads * (value_dim + context_dim)
+		layer.OutputDim = numHeads * (valueDim + contextDim)
 		layer.Spec = &AttentionSpec{
 			InputDim:       layer.InputDim,
-			OutputDim:      layer.InputDim,
+			OutputDim:      numHeads * (valueDim + contextDim),
 			NumHeads:       numHeads,
 			ValueDim:       valueDim,
 			KeyDim:         keyDim,
-			NumLeftInputs:  cfg.GetInt("num-left-inputs", 0),
-			NumRightInputs: cfg.GetInt("num-right-inputs", 0),
+			NumLeftInputs:  numLeftInputs,
+			NumRightInputs: numRightInputs,
+			ContextDim:     contextDim,
 			TimeStride:     cfg.GetInt("time-stride", 1),
 			L2Reg:          cfg.GetFloat("l2-regularize", 0),
 		}
@@ -348,12 +323,13 @@ func resolveLayer(cfg *LayerConfig, layerMap map[string]*Layer, prev []*Layer, i
 		if smallDim <= 0 || bigDim <= 0 {
 			return nil, fmt.Errorf("prefinal-layer missing small-dim or big-dim")
 		}
-		layer.OutputDim = bigDim
+		// Kaldi prefinal output = batchnorm2 (small dim)
+		layer.OutputDim = smallDim
 		layer.Spec = &PrefinalSpec{
 			InputDim:  layer.InputDim,
 			SmallDim:  smallDim,
 			BigDim:    bigDim,
-			OutputDim: bigDim,
+			OutputDim: smallDim,
 			L2Reg:     cfg.GetFloat("l2-regularize", 0),
 		}
 
@@ -378,16 +354,10 @@ func resolveLayer(cfg *LayerConfig, layerMap map[string]*Layer, prev []*Layer, i
 	return layer, nil
 }
 
-// resolveLayerName finds a layer by name, supporting Kaldi's naming convention
-// where "cnn6" refers to the last sub-component "cnn6.batchnorm"
 func resolveLayerName(name string, layerMap map[string]*Layer) *Layer {
-	// Exact match first
 	if l, ok := layerMap[name]; ok {
 		return l
 	}
-
-	// Try as prefix — find the last layer starting with "name."
-	// This handles "cnn6" → "cnn6.batchnorm"
 	var best *Layer
 	for lname, l := range layerMap {
 		if lname == name || hasPrefix(lname, name) {

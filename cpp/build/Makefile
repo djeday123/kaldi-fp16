@@ -187,6 +187,30 @@ kaldi_fp16_cgo/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16_cgo.dir/build.make CMakeFiles/kaldi_fp16_cgo.dir/build
 .PHONY : kaldi_fp16_cgo/fast
 
+cuda/backward_wrappers.o: cuda/backward_wrappers.cu.o
+.PHONY : cuda/backward_wrappers.o
+
+# target to build an object file
+cuda/backward_wrappers.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/backward_wrappers.cu.o
+.PHONY : cuda/backward_wrappers.cu.o
+
+cuda/backward_wrappers.i: cuda/backward_wrappers.cu.i
+.PHONY : cuda/backward_wrappers.i
+
+# target to preprocess a source file
+cuda/backward_wrappers.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/backward_wrappers.cu.i
+.PHONY : cuda/backward_wrappers.cu.i
+
+cuda/backward_wrappers.s: cuda/backward_wrappers.cu.s
+.PHONY : cuda/backward_wrappers.s
+
+# target to generate assembly for a file
+cuda/backward_wrappers.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/backward_wrappers.cu.s
+.PHONY : cuda/backward_wrappers.cu.s
+
 cuda/bridge.o: cuda/bridge.cu.o
 .PHONY : cuda/bridge.o
 
@@ -235,29 +259,29 @@ cuda/chain.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain.cu.s
 .PHONY : cuda/chain.cu.s
 
-cuda/chain_backward_kernels.o: cuda/chain_backward_kernels.cu.o
-.PHONY : cuda/chain_backward_kernels.o
+cuda/chain_backward.o: cuda/chain_backward.cu.o
+.PHONY : cuda/chain_backward.o
 
 # target to build an object file
-cuda/chain_backward_kernels.cu.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward_kernels.cu.o
-.PHONY : cuda/chain_backward_kernels.cu.o
+cuda/chain_backward.cu.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward.cu.o
+.PHONY : cuda/chain_backward.cu.o
 
-cuda/chain_backward_kernels.i: cuda/chain_backward_kernels.cu.i
-.PHONY : cuda/chain_backward_kernels.i
+cuda/chain_backward.i: cuda/chain_backward.cu.i
+.PHONY : cuda/chain_backward.i
 
 # target to preprocess a source file
-cuda/chain_backward_kernels.cu.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward_kernels.cu.i
-.PHONY : cuda/chain_backward_kernels.cu.i
+cuda/chain_backward.cu.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward.cu.i
+.PHONY : cuda/chain_backward.cu.i
 
-cuda/chain_backward_kernels.s: cuda/chain_backward_kernels.cu.s
-.PHONY : cuda/chain_backward_kernels.s
+cuda/chain_backward.s: cuda/chain_backward.cu.s
+.PHONY : cuda/chain_backward.s
 
 # target to generate assembly for a file
-cuda/chain_backward_kernels.cu.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward_kernels.cu.s
-.PHONY : cuda/chain_backward_kernels.cu.s
+cuda/chain_backward.cu.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kaldi_fp16.dir/build.make CMakeFiles/kaldi_fp16.dir/cuda/chain_backward.cu.s
+.PHONY : cuda/chain_backward.cu.s
 
 cuda/chain_den.o: cuda/chain_den.cu.o
 .PHONY : cuda/chain_den.o
@@ -441,15 +465,18 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... kaldi_fp16"
 	@echo "... kaldi_fp16_cgo"
+	@echo "... cuda/backward_wrappers.o"
+	@echo "... cuda/backward_wrappers.i"
+	@echo "... cuda/backward_wrappers.s"
 	@echo "... cuda/bridge.o"
 	@echo "... cuda/bridge.i"
 	@echo "... cuda/bridge.s"
 	@echo "... cuda/chain.o"
 	@echo "... cuda/chain.i"
 	@echo "... cuda/chain.s"
-	@echo "... cuda/chain_backward_kernels.o"
-	@echo "... cuda/chain_backward_kernels.i"
-	@echo "... cuda/chain_backward_kernels.s"
+	@echo "... cuda/chain_backward.o"
+	@echo "... cuda/chain_backward.i"
+	@echo "... cuda/chain_backward.s"
 	@echo "... cuda/chain_den.o"
 	@echo "... cuda/chain_den.i"
 	@echo "... cuda/chain_den.s"

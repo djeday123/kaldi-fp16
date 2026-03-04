@@ -53,6 +53,7 @@ extern "C"
                            int num_states, int num_arcs, GPUBatchPtrs *out);
     int bridge_batch_transfer(const GPUBatchPtrs *ptrs, const void *host_buf, size_t total_bytes);
     void bridge_batch_free(GPUBatchPtrs *ptrs);
+    void bridge_gpu_memset(void *ptr, int value, size_t bytes);
 
     // GPU conversion kernels
     int bridge_fp16_to_fp32_gpu(float *dst_device, const void *src_device, size_t count);

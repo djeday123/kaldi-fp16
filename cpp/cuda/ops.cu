@@ -303,6 +303,22 @@ __global__ void kernel_subsample_rows(
     dst[out_row * cols + col] = src[in_row * cols + col];
 }
 
+// Slice cols: copy columns from src at offset into dst
+// dst[t, :] = src[t, src_col_offset : src_col_offset + dst_cols]
+__global__ void kernel_slice_cols(
+    __half *dst, int T, int dst_cols,
+    const __half *src, int src_cols,
+    int src_col_offset)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = T * dst_cols;
+    if (idx >= total)
+        return;
+    int t = idx / dst_cols;
+    int c = idx % dst_cols;
+    dst[t * dst_cols + c] = src[t * src_cols + src_col_offset + c];
+}
+
 // ============================================================
 // C interface
 // ============================================================
@@ -624,6 +640,18 @@ extern "C"
         kernel_subsample_rows<<<blocks, threads>>>(
             (__half *)dst, (const __half *)src,
             out_rows, cols, stride, row_offset);
+    }
+
+    int ops_slice_cols(const void *src, int T, int src_cols,
+                       void *dst, int dst_cols,
+                       int src_col_offset)
+    {
+        int total = T * dst_cols;
+        int threads = 256;
+        int blocks = (total + threads - 1) / threads;
+        kernel_slice_cols<<<blocks, threads>>>(
+            (__half *)dst, T, dst_cols, (const __half *)src, src_cols, src_col_offset);
+        return cudaGetLastError() == cudaSuccess ? 0 : -1;
     }
 
 } // extern "C"

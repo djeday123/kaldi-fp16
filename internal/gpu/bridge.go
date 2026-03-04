@@ -2,7 +2,7 @@ package gpu
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../cpp/include
-#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lkaldi_fp16_cgo -lcublas -lcudart -lstdc++
+#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lkaldi_fp16_cgo -L/usr/local/cuda-12.8/lib64 -lcublas -lcudart -lstdc++
 
 #include "bridge.h"
 #include <stdlib.h>

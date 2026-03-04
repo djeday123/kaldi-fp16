@@ -2,7 +2,7 @@ package gpu
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../cpp/include
-#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lkaldi_fp16_cgo -lcublas -lcudart -lstdc++
+#cgo LDFLAGS: -L${SRCDIR}/../../cpp/build -lkaldi_fp16 -lkaldi_fp16_cgo -L/usr/local/cuda-12.8/lib64 -lcublas -lcudart -lstdc++
 
 #include "bridge.h"
 #include "ops.h"
@@ -132,11 +132,12 @@ func LogSoftmax(t *Tensor) error {
 
 // BNParams holds batch normalization parameters on GPU (FP32)
 type BNParams struct {
-	Mean  unsafe.Pointer // [D] float32
-	Var   unsafe.Pointer // [D] float32
-	Gamma unsafe.Pointer // [D] float32
-	Beta  unsafe.Pointer // [D] float32
-	Dim   int
+	Mean    unsafe.Pointer // [D] float32
+	Var     unsafe.Pointer // [D] float32
+	Gamma   unsafe.Pointer // [D] float32
+	Beta    unsafe.Pointer // [D] float32
+	Dim     int
+	Epsilon float32 // small constant for numerical stability
 }
 
 // NewBNParams creates batchnorm parameters from CPU float32 arrays
@@ -271,7 +272,7 @@ func Fill(t *Tensor, val float32) error {
 }
 
 // ============================================================
-// Concat columns (for Append in xconfig)
+// Concat and slice columns (for Append in xconfig)
 // ============================================================
 
 // ConcatCols copies src columns into dst at column offset
@@ -287,6 +288,22 @@ func ConcatCols(dst *Tensor, src *Tensor, colOffset int) error {
 	)
 	if ret != 0 {
 		return fmt.Errorf("concat_cols: %w", opsErr())
+	}
+	return nil
+}
+
+// SliceCols copies columns [colOffset, colOffset+dst.Cols) from src into dst
+func SliceCols(dst *Tensor, src *Tensor, colOffset int) error {
+	if dst.Rows != src.Rows {
+		return fmt.Errorf("SliceCols row mismatch: %d vs %d", dst.Rows, src.Rows)
+	}
+	ret := C.ops_slice_cols(
+		src.Ptr, C.int(src.Rows), C.int(src.Cols),
+		dst.Ptr, C.int(dst.Cols),
+		C.int(colOffset),
+	)
+	if ret != 0 {
+		return fmt.Errorf("slice_cols: %w", opsErr())
 	}
 	return nil
 }

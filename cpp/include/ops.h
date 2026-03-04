@@ -143,6 +143,50 @@ extern "C"
     const char *ops_last_error(void);
     void ops_clear_error(void);
 
+    // ============================================================
+    // Backward activations (add to cpp/include/ops.h)
+    // Insert BEFORE the closing #ifdef __cplusplus / } / #endif
+    // ============================================================
+
+    // ============================================================
+    // Activation backward passes
+    //
+    // All modify grad in-place: grad *= d(activation)/d(input)
+    // ============================================================
+
+    // ReLU backward: grad[i] = x[i] > 0 ? grad[i] : 0
+    // x: [count] FP16 pre-activation (saved from forward)
+    // grad: [count] FP16 in/out
+    int ops_relu_backward(const void *x, void *grad, int count);
+
+    // Sigmoid backward: grad[i] *= output[i] * (1 - output[i])
+    // output: [count] FP16 post-activation (saved from forward)
+    // grad: [count] FP16 in/out
+    int ops_sigmoid_backward(const void *output, void *grad, int count);
+
+    // Tanh backward: grad[i] *= (1 - output[i]^2)
+    // output: [count] FP16 post-activation (saved from forward)
+    // grad: [count] FP16 in/out
+    int ops_tanh_backward(const void *output, void *grad, int count);
+
+    // Transpose: dst[N×M] = src[M×N]^T
+    int ops_transpose(const void *src, void *dst, int M, int N);
+
+    // BatchNorm backward (inference): gradIn = gradOut * gamma / sqrt(var + eps)
+    int ops_batchnorm_backward(const void *grad_out, void *grad_in,
+                               const float *gamma, const float *variance,
+                               float eps, int rows, int cols);
+
+    // FP16 → FP32 conversion
+    int ops_fp16_to_fp32(const void *src, float *dst, int count);
+
+    // SGD update with FP32 master weights
+    int ops_sgd_update(float *w_fp32, void *w_fp16, const void *grad_fp16,
+                       float *velocity, float lr, float momentum, int count);
+
+    int ops_slice_cols(const void *src, int T, int src_cols,
+                       void *dst, int dst_cols, int src_col_offset);
+
 #ifdef __cplusplus
 }
 #endif

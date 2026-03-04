@@ -71,8 +71,9 @@ add_library(kaldi_fp16
     cuda/ops.cu
     cuda/chain.cu
     cuda/chain_den.cu
-    cuda/chain_backward_kernels.cu
+    cuda/chain_backward.cu
     cuda/chain_det.cu
+    cuda/backward_wrappers.cu
 )
 
 target_include_directories(kaldi_fp16 PUBLIC
